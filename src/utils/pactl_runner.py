@@ -506,6 +506,11 @@ class PactlRunner:
         (e.g. `game_sink.monitor`) and whose sink is the real output (e.g.
         `alsa_output.pci-...analog-stereo`).
 
+        The loopback is pinned to its endpoints via `sink_dont_move=true` and
+        `source_dont_move=true`. Without these, WirePlumber may re-route the
+        loopback when the user changes the default sink in the system tray.
+        See docs/PHASE3_INTROSPECTION_REPORT.md for details.
+
         Args:
             source_monitor: Full monitor source name (sink_name + '.monitor').
                              Example: 'game_sink.monitor'
@@ -524,6 +529,8 @@ class PactlRunner:
             f'source={source_monitor}',
             f'sink={sink}',
             f'latency_msec={latency_msec}',
+            'sink_dont_move=true',
+            'source_dont_move=true',
         ]
         output, return_code = PactlRunner.run_command(cmd_args, logger)
         if return_code != 0:
@@ -651,3 +658,90 @@ class PactlRunner:
                 continue
             hardware.append(name)
         return hardware
+
+    @staticmethod
+    def parse_pactl_module_args(args_str: str) -> Dict[str, str]:
+        """
+        Parse a pactl module argument string into a dict.
+
+        Handles the common case where `sink_properties=key1=val1 key2=val2 ...`
+        captures the rest of the string as one value. For all other args, splits
+        on `=` and takes the first `=` as the separator.
+
+        Args:
+            args_str: The argument string from `pactl list modules short` field 3.
+
+        Returns:
+            Dict mapping arg name to arg value. `sink_properties` (if present)
+            captures the rest of the string verbatim — callers should not try
+            to parse it further without single-quote-aware tooling.
+        """
+        result: Dict[str, str] = {}
+        tokens = args_str.split()
+        i = 0
+        while i < len(tokens):
+            tok = tokens[i]
+            if '=' not in tok:
+                i += 1
+                continue
+            key, _, value = tok.partition('=')
+            if key == 'sink_properties':
+                # Capture everything after sink_properties= as one value
+                # (the rest of the tokens are the proplist).
+                # First token's value is whatever came after the first '='.
+                # We need to reconstruct: drop the 'sink_properties=' prefix
+                # and re-join everything from here.
+                value = args_str.split('sink_properties=', 1)[1]
+                result[key] = value
+                return result  # sink_properties always ends the args list
+            else:
+                result[key] = value
+            i += 1
+        return result
+
+    @staticmethod
+    def list_modules_short(logger=None) -> List[Dict[str, Any]]:
+        """
+        Return all loaded pactl modules with parsed args.
+
+        Unlike list_modules() (which returns the verbose block format),
+        this returns a flat list of {id, name, args, raw_args} from
+        `pactl list modules short` — the format used for round-tripping
+        profiles.
+
+        Args:
+            logger: Optional callback function to log command execution.
+
+        Returns:
+            List of {id: int, name: str, args: dict, raw_args: str}.
+        """
+        output, return_code = PactlRunner.run_command(
+            ['list', 'modules', 'short'], logger
+        )
+        if return_code != 0:
+            return []
+        modules = []
+        for line in output.splitlines():
+            parts = line.split('\t', 2)
+            if len(parts) != 3:
+                continue
+            mod_id_str, mod_name, args_str = parts
+            try:
+                mod_id = int(mod_id_str)
+            except ValueError:
+                continue
+            modules.append({
+                'id': mod_id,
+                'name': mod_name,
+                'args': PactlRunner.parse_pactl_module_args(args_str),
+                'raw_args': args_str,
+            })
+        return modules
+
+    @staticmethod
+    def sink_exists(sink_name: str, logger=None) -> bool:
+        """Return True if a sink with this exact name is currently registered."""
+        if not sink_name:
+            return False
+        sinks = PactlRunner.list_sinks(logger)
+        return any(s.get('name') == sink_name for s in sinks)

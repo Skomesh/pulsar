@@ -490,3 +490,164 @@ class PactlRunner:
                     errors.append(f"Failed to unload module #{module_id}")
 
         return successful, errors
+
+    @staticmethod
+    def create_loopback(
+        source_monitor: str,
+        sink: str,
+        latency_msec: int = 1,
+        logger=None,
+    ) -> Optional[str]:
+        """
+        Create a module-loopback that forwards audio from a source's monitor to a sink.
+
+        In PulseAudio/PipeWire, you "loopback a virtual sink to a real output" by
+        creating a module-loopback whose source is the virtual sink's monitor
+        (e.g. `game_sink.monitor`) and whose sink is the real output (e.g.
+        `alsa_output.pci-...analog-stereo`).
+
+        Args:
+            source_monitor: Full monitor source name (sink_name + '.monitor').
+                             Example: 'game_sink.monitor'
+            sink: Target sink name (real output device).
+                  Example: 'alsa_output.pci-0000_00_1f.3.analog-stereo'
+            latency_msec: Loopback latency in milliseconds. 1ms is fine for desktop
+                          use; raise it for heavier DSP loads.
+            logger: Optional callback function to log command execution.
+
+        Returns:
+            The loaded module ID as a string if successful, None otherwise.
+        """
+        cmd_args = [
+            'load-module',
+            'module-loopback',
+            f'source={source_monitor}',
+            f'sink={sink}',
+            f'latency_msec={latency_msec}',
+        ]
+        output, return_code = PactlRunner.run_command(cmd_args, logger)
+        if return_code != 0:
+            return None
+        # pactl returns the module ID as a plain integer on stdout
+        return output.strip() or None
+
+    @staticmethod
+    def list_loopbacks(logger=None) -> List[Dict[str, str]]:
+        """
+        Return all currently loaded module-loopback instances.
+
+        Each entry is a dict with keys:
+            - 'id': module ID as string
+            - 'source': source name (typically ends in '.monitor')
+            - 'sink': target sink name
+
+        Args:
+            logger: Optional callback function to log command execution.
+
+        Returns:
+            List of loopback module dicts. Empty list if none.
+        """
+        modules = PactlRunner.list_modules(logger)
+        loopbacks = []
+        for m in modules:
+            if m.get('name') != 'module-loopback':
+                continue
+            arg = m.get('argument', '')
+            # Argument looks like: source=X.monitor sink=Y latency_msec=1
+            entry: Dict[str, str] = {'id': m.get('id', '')}
+            for token in arg.split():
+                if '=' in token:
+                    key, _, value = token.partition('=')
+                    if key in ('source', 'sink'):
+                        entry[key] = value
+            loopbacks.append(entry)
+        return loopbacks
+
+    @staticmethod
+    def unload_loopback(module_id: str, logger=None) -> bool:
+        """
+        Unload a module-loopback by ID.
+
+        Args:
+            module_id: The numeric module ID returned by create_loopback().
+            logger: Optional callback function to log command execution.
+
+        Returns:
+            True if successful, False otherwise.
+        """
+        return PactlRunner.unload_module(module_id, logger)
+
+    @staticmethod
+    def is_null_sink(sink_name: str, logger=None) -> bool:
+        """
+        Return True if the given sink name was created by module-null-sink
+        (i.e. is a virtual device, not real hardware).
+
+        Heuristic: query all loaded modules and check whether any
+        module-null-sink has an argument containing `sink_name=<this_name>`.
+
+        Args:
+            sink_name: The sink's `Name` field from `pactl list sinks`.
+            logger: Optional callback function to log command execution.
+
+        Returns:
+            True if this is a null-sink (virtual), False if it's a real device
+            or unknown.
+        """
+        modules = PactlRunner.list_modules(logger)
+        marker = f'sink_name={sink_name}'
+        for m in modules:
+            if m.get('name') == 'module-null-sink' and marker in m.get('argument', ''):
+                return True
+        return False
+
+    @staticmethod
+    def monitor_source_for(sink_name: str, logger=None) -> Optional[str]:
+        """
+        Return the monitor source name for a given sink.
+
+        In PulseAudio/PipeWire, every sink automatically has a `<sink_name>.monitor`
+        source that captures the audio being played to it. This is the source you
+        pass to `create_loopback` to wire the sink to a real output.
+
+        Args:
+            sink_name: The sink's `Name` field from `pactl list sinks`.
+            logger: Optional callback function to log command execution (unused,
+                    kept for API symmetry).
+
+        Returns:
+            `f"{sink_name}.monitor"` always, since this is a PulseAudio/PipeWire
+            convention. Returns None if sink_name is empty.
+        """
+        if not sink_name:
+            return None
+        return f"{sink_name}.monitor"
+
+    @staticmethod
+    def list_hardware_outputs(logger=None) -> List[str]:
+        """
+        Return the names of real (non-null-sink) output sinks suitable for routing.
+
+        These are the sinks a user would pick from a "Route to" dropdown.
+
+        Args:
+            logger: Optional callback function to log command execution.
+
+        Returns:
+            List of sink names. Excludes null-sinks and any sinks in SUSPENDED
+            state (unavailable devices).
+        """
+        sinks = PactlRunner.list_sinks(logger)
+        hardware = []
+        for s in sinks:
+            name = s.get('name', '')
+            if not name:
+                continue
+            # Exclude null-sinks (virtual)
+            if PactlRunner.is_null_sink(name, logger):
+                continue
+            # Exclude suspended (unavailable) sinks
+            if s.get('state', '').upper() == 'SUSPENDED':
+                continue
+            hardware.append(name)
+        return hardware

@@ -136,5 +136,97 @@ class TestCreateNullSink(unittest.TestCase):
         self.assertEqual(props["node.description"], "MyCustomSink")
 
 
+@unittest.skipUnless(pactl_available(), "pactl not available")
+class TestLoopback(unittest.TestCase):
+    """End-to-end tests for module-loopback creation and routing helpers."""
+
+    @classmethod
+    def setUpClass(cls):
+        PactlRunner.unload_all_null_sinks()
+
+    def tearDown(self):
+        # Unload any leftover loopbacks, then any leftover null-sinks
+        for lb in PactlRunner.list_loopbacks():
+            PactlRunner.unload_loopback(lb["id"])
+        PactlRunner.unload_all_null_sinks()
+
+    def _pick_hardware_output(self):
+        """Pick any non-null-sink output for routing tests. Skip if none."""
+        outputs = PactlRunner.list_hardware_outputs()
+        if not outputs:
+            self.skipTest("no hardware output sinks available for routing test")
+        return outputs[0]
+
+    def test_monitor_source_for(self):
+        self.assertEqual(
+            PactlRunner.monitor_source_for("my_sink"), "my_sink.monitor"
+        )
+        self.assertIsNone(PactlRunner.monitor_source_for(""))
+
+    def test_is_null_sink(self):
+        PactlRunner.create_sink_only("ns_check", "NSCheck", channels=2)
+        self.assertTrue(PactlRunner.is_null_sink("ns_check"))
+        hw = self._pick_hardware_output()
+        self.assertFalse(PactlRunner.is_null_sink(hw))
+
+    def test_create_loopback_returns_module_id(self):
+        PactlRunner.create_sink_only("lb_create", "LBCreate", channels=2)
+        target = self._pick_hardware_output()
+        monitor = PactlRunner.monitor_source_for("lb_create")
+
+        lb_id = PactlRunner.create_loopback(monitor, target, latency_msec=1)
+        self.assertIsNotNone(lb_id)
+        self.assertTrue(lb_id.isdigit(), f"module ID should be numeric, got {lb_id!r}")
+
+    def test_list_loopbacks_finds_what_we_created(self):
+        PactlRunner.create_sink_only("lb_list", "LBList", channels=2)
+        target = self._pick_hardware_output()
+        monitor = PactlRunner.monitor_source_for("lb_list")
+
+        lb_id = PactlRunner.create_loopback(monitor, target, latency_msec=1)
+        loopbacks = PactlRunner.list_loopbacks()
+
+        ours = [lb for lb in loopbacks if lb["id"] == lb_id]
+        self.assertEqual(len(ours), 1)
+        self.assertEqual(ours[0]["source"], monitor)
+        self.assertEqual(ours[0]["sink"], target)
+
+    def test_unload_loopback_removes_it(self):
+        PactlRunner.create_sink_only("lb_unload", "LBUnload", channels=2)
+        target = self._pick_hardware_output()
+        monitor = PactlRunner.monitor_source_for("lb_unload")
+
+        lb_id = PactlRunner.create_loopback(monitor, target, latency_msec=1)
+        self.assertTrue(PactlRunner.unload_loopback(lb_id))
+        remaining = [
+            lb for lb in PactlRunner.list_loopbacks() if lb["id"] == lb_id
+        ]
+        self.assertEqual(remaining, [])
+
+    def test_create_loopback_with_unknown_sink_still_loads(self):
+        """PipeWire tolerates a non-existent sink: the loopback module loads but
+        has no effect. We assert behavior, not validation — the module is loaded
+        successfully (no error) even with a bogus sink name. This documents that
+        the UI must verify sink existence separately before calling create_loopback.
+        """
+        PactlRunner.create_sink_only("lb_bad", "LBBad", channels=2)
+        monitor = PactlRunner.monitor_source_for("lb_bad")
+        result = PactlRunner.create_loopback(
+            monitor, "this_sink_does_not_exist_12345", latency_msec=1
+        )
+        # Module loads — but it won't actually route anywhere
+        self.assertIsNotNone(result)
+        # And we can clean it up
+        self.assertTrue(PactlRunner.unload_loopback(result))
+
+    def test_list_hardware_outputs_excludes_null_sinks(self):
+        PactlRunner.create_sink_only("ns_exclude", "NSExclude", channels=2)
+        outputs = PactlRunner.list_hardware_outputs()
+        self.assertNotIn("ns_exclude", outputs)
+        # Every returned name should NOT be a null-sink
+        for name in outputs:
+            self.assertFalse(PactlRunner.is_null_sink(name))
+
+
 if __name__ == "__main__":
     unittest.main()

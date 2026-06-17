@@ -460,6 +460,51 @@ class MainWindow:
         )
         self.remove_null_sinks_button.pack(side=tk.LEFT, padx=5)
 
+        # Routing frame — lets the user wire a selected virtual sink to a real output
+        self.routing_frame = ttk.LabelFrame(self.manage_tab, text="Routing")
+        self.routing_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        # Status line
+        self.routing_status_var = tk.StringVar(value="Select a virtual sink to route")
+        ttk.Label(
+            self.routing_frame,
+            textvariable=self.routing_status_var,
+            font=("", 9),
+        ).grid(row=0, column=0, columnspan=3, sticky=tk.W, padx=5, pady=(5, 2))
+
+        # Output dropdown
+        ttk.Label(self.routing_frame, text="Route to:").grid(
+            row=1, column=0, sticky=tk.W, padx=5, pady=2
+        )
+        self.routing_output_var = tk.StringVar()
+        self.routing_output_combo = ttk.Combobox(
+            self.routing_frame,
+            textvariable=self.routing_output_var,
+            values=(),
+            state="disabled",
+            width=60,
+        )
+        self.routing_output_combo.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=5, pady=2)
+
+        # Buttons
+        self.route_button = ttk.Button(
+            self.routing_frame,
+            text="Apply Routing",
+            command=self.apply_routing,
+            state="disabled",
+        )
+        self.route_button.grid(row=1, column=2, padx=5, pady=2)
+
+        self.stop_route_button = ttk.Button(
+            self.routing_frame,
+            text="Stop Routing",
+            command=self.stop_routing,
+            state="disabled",
+        )
+        self.stop_route_button.grid(row=1, column=3, padx=5, pady=2)
+
+        self.routing_frame.columnconfigure(1, weight=1)
+
         # Details frame with scrollable text widget and toggle
         details_frame = ttk.LabelFrame(self.manage_tab, text="Details")
         details_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
@@ -1144,6 +1189,7 @@ class MainWindow:
         if not selected:
             self.update_details_display("Select an item to see details")
             self.unload_button.config(state="disabled")
+            self.update_routing_panel(None)
             return
 
         # Get the selected item
@@ -1153,6 +1199,7 @@ class MainWindow:
         if not values or len(values) < 2:
             self.update_details_display("Select an item to see details")
             self.unload_button.config(state="disabled")
+            self.update_routing_panel(None)
             return
 
         entity_id, entity_type, entity_name = values
@@ -1166,7 +1213,154 @@ class MainWindow:
         else:
             self.unload_button.config(state="disabled")
 
+        # Update routing panel — only meaningful for virtual sinks
+        if entity_type == "sink":
+            self.update_routing_panel(entity_name)
+        else:
+            self.update_routing_panel(None)
+
         self.update_details_display(details)
+
+    # ------------------------------------------------------------------
+    # Routing panel methods (Phase 2: loopback support)
+    # ------------------------------------------------------------------
+
+    def update_routing_panel(self, sink_name):
+        """Populate the Routing panel for the selected sink (or reset it).
+
+        Called from on_unified_tree_select. Behavior:
+        - sink_name is None: reset the panel to placeholder state.
+        - sink_name is a hardware sink: disable the panel (hardware sinks
+          don't need loopback routing; they ARE the real outputs).
+        - sink_name is a null-sink (virtual): show current routing status
+          (if any), populate the output dropdown, enable Apply/Stop as
+          appropriate.
+        """
+        # Default: reset everything
+        self.routing_status_var.set("Select a virtual sink to route")
+        self.routing_output_combo.config(values=(), state="disabled")
+        self.route_button.config(state="disabled")
+        self.stop_route_button.config(state="disabled")
+        self._routing_sink_name = None
+
+        if sink_name is None:
+            return
+
+        # Hardware sinks: panel isn't useful (you can't "route to" a sink)
+        if not PactlRunner.is_null_sink(sink_name):
+            self.routing_status_var.set(
+                f"'{sink_name}' is a hardware sink — nothing to route"
+            )
+            return
+
+        # It's a virtual sink — populate the panel
+        self._routing_sink_name = sink_name
+        monitor = PactlRunner.monitor_source_for(sink_name)
+        loopbacks = PactlRunner.list_loopbacks()
+        current = next(
+            (lb for lb in loopbacks if lb.get("source") == monitor), None
+        )
+
+        # Refresh output dropdown
+        outputs = PactlRunner.list_hardware_outputs()
+        if not outputs:
+            self.routing_status_var.set(
+                f"No hardware output sinks available to route '{sink_name}' to"
+            )
+            return
+
+        self.routing_output_combo.config(values=outputs, state="readonly")
+        # Pre-select current target if there's an active loopback
+        if current and current.get("sink") in outputs:
+            self.routing_output_var.set(current["sink"])
+            self.routing_status_var.set(
+                f"Currently routing '{sink_name}' → '{current['sink']}' "
+                f"(loopback module #{current['id']})"
+            )
+            self.route_button.config(state="normal")
+            self.stop_route_button.config(state="normal")
+        else:
+            # No active loopback. Default-select the first output.
+            self.routing_output_var.set(outputs[0])
+            self.routing_status_var.set(
+                f"'{sink_name}' is not currently routed"
+            )
+            self.route_button.config(state="normal")
+            self.stop_route_button.config(state="disabled")
+
+    def apply_routing(self):
+        """Create (or replace) a loopback from the selected sink to the chosen output."""
+        sink_name = getattr(self, "_routing_sink_name", None)
+        if not sink_name:
+            return
+
+        target = self.routing_output_var.get().strip()
+        if not target:
+            messagebox.showerror("Routing error", "Pick a hardware output to route to")
+            return
+
+        monitor = PactlRunner.monitor_source_for(sink_name)
+        if monitor is None:
+            messagebox.showerror("Routing error", f"Cannot derive monitor source for '{sink_name}'")
+            return
+        # If there's an existing loopback from this sink's monitor, remove it first
+        # so we don't end up with two loopbacks stacking audio.
+        for lb in PactlRunner.list_loopbacks():
+            if lb.get("source") == monitor:
+                PactlRunner.unload_loopback(lb["id"])
+
+        lb_id = PactlRunner.create_loopback(
+            monitor, target, latency_msec=1, logger=self.add_output
+        )
+        if lb_id is None:
+            self.add_output(f"Failed to create loopback from {monitor} to {target}")
+            messagebox.showerror("Routing error", "pactl refused the loopback command")
+            return
+
+        self.add_output(
+            f"Routing '{sink_name}' → '{target}' (loopback module #{lb_id})"
+        )
+        self.status_var.set(f"Routed '{sink_name}' → '{target}'")
+        self.refresh_all_views()
+        # Re-select the same sink to refresh the routing panel state
+        self._reselect_after_refresh(sink_name)
+
+    def stop_routing(self):
+        """Unload the active loopback for the selected sink."""
+        sink_name = getattr(self, "_routing_sink_name", None)
+        if not sink_name:
+            return
+
+        monitor = PactlRunner.monitor_source_for(sink_name)
+        if monitor is None:
+            return
+        loopbacks = PactlRunner.list_loopbacks()
+        ours = [lb for lb in loopbacks if lb.get("source") == monitor]
+        if not ours:
+            messagebox.showinfo("Routing", f"'{sink_name}' is not currently routed")
+            return
+
+        for lb in ours:
+            ok = PactlRunner.unload_loopback(lb["id"])
+            if ok:
+                self.add_output(f"Stopped routing '{sink_name}' (unloaded #{lb['id']})")
+            else:
+                self.add_output(f"Failed to unload loopback #{lb['id']}")
+
+        self.status_var.set(f"Stopped routing '{sink_name}'")
+        self.refresh_all_views()
+        self._reselect_after_refresh(sink_name)
+
+    def _reselect_after_refresh(self, sink_name):
+        """After refresh_all_views(), re-find and re-select the sink in the tree."""
+        for tree_item in self.unified_tree.get_children():
+            for child in self.unified_tree.get_children(tree_item):
+                item = self.unified_tree.item(child)
+                vals = item.get("values", ())
+                if len(vals) >= 3 and vals[1] == "sink" and vals[2] == sink_name:
+                    self.unified_tree.selection_set(child)
+                    self.unified_tree.focus(child)
+                    return
 
     def _generate_detailed_info(self, entity_id, entity_type, entity_name, tree_item_id):
         """Generate tiered technical specifications for the selected item."""

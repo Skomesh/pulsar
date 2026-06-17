@@ -66,7 +66,6 @@ class MainWindow:
         self.manage_tab = ttk.Frame(self.tab_control)
         self.profiles_tab = ttk.Frame(self.tab_control)
         self.capture_tab = ttk.Frame(self.tab_control)
-        self.hardware_tab = ttk.Frame(self.tab_control)
         self.diagnostics_tab = ttk.Frame(self.tab_control)
         self.output_tab = ttk.Frame(self.tab_control)
 
@@ -75,7 +74,6 @@ class MainWindow:
         self.tab_control.add(self.manage_tab, text="Manage")
         self.tab_control.add(self.profiles_tab, text="Profiles")
         self.tab_control.add(self.capture_tab, text="App Audio")
-        self.tab_control.add(self.hardware_tab, text="Hardware")
         self.tab_control.add(self.diagnostics_tab, text="Diagnostics")
         self.tab_control.add(self.output_tab, text="Output")
 
@@ -89,7 +87,6 @@ class MainWindow:
         self.setup_manage_tab()
         self.setup_profiles_tab()
         self.setup_capture_tab()
-        self.setup_hardware_tab()
         self.setup_diagnostics_tab()
         self.setup_output_tab()
 
@@ -149,6 +146,8 @@ class MainWindow:
 
         def _on_inner_configure(_event):
             canvas.configure(scrollregion=canvas.bbox("all"))
+            # Re-bind to catch any new children
+            _bind_wheel_to_children(inner)
 
         def _on_canvas_configure(event):
             canvas.itemconfigure(inner_window, width=event.width)
@@ -169,18 +168,33 @@ class MainWindow:
             if delta:
                 canvas.yview_scroll(delta, "units")
 
-        def _bind_wheel(_event):
-            canvas.bind_all("<MouseWheel>", _on_mousewheel)
-            canvas.bind_all("<Button-4>", _on_mousewheel)
-            canvas.bind_all("<Button-5>", _on_mousewheel)
+        # Bind mousewheel ONLY to the inner frame and its descendants
+        # (not bind_all). The bug we fixed: bind_all catches every
+        # <MouseWheel> event anywhere in the app, including over
+        # Treeviews and Listboxes inside the tab, scrolling the page
+        # instead of the inner widget. Tkinter's event propagation
+        # already routes child events to parent handlers, so binding
+        # to the inner frame catches wheel events over any widget
+        # inside it while letting widgets OUTSIDE the tab scroll
+        # naturally (e.g. other tabs, popup menus, the Output tab
+        # text widget).
+        def _bind_wheel_to_children(widget):
+            widget.bind("<MouseWheel>", _on_mousewheel)
+            widget.bind("<Button-4>", _on_mousewheel)
+            widget.bind("<Button-5>", _on_mousewheel)
+            for child in widget.winfo_children():
+                _bind_wheel_to_children(child)
 
-        def _unbind_wheel(_event):
-            canvas.unbind_all("<MouseWheel>")
-            canvas.unbind_all("<Button-4>")
-            canvas.unbind_all("<Button-5>")
+        # Bind to all descendants of the inner frame. Also rebind
+        # every time the inner frame's contents change (because new
+        # widgets created after this returns wouldn't otherwise get
+        # the binding).
+        _bind_wheel_to_children(inner)
 
-        canvas.bind("<Enter>", _bind_wheel)
-        canvas.bind("<Leave>", _unbind_wheel)
+        def _on_inner_configure(_event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            # Re-bind to catch any new children
+            _bind_wheel_to_children(inner)
 
         return inner
 
@@ -321,8 +335,11 @@ class MainWindow:
         )
         self.advanced_toggle.grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=(10, 5))
 
-        # Advanced options frame (initially hidden)
+        # Advanced options frame — placed BELOW the toggle (row 5) so
+        # the toggle stays visible when the frame is shown. Initially
+        # hidden via grid_remove().
         self.advanced_frame = ttk.LabelFrame(frame, text="Advanced Options", padding="10")
+        self._advanced_frame_row = 5
 
         # Sample Rate
         ttk.Label(self.advanced_frame, text="Sample Rate (Hz):").grid(
@@ -386,20 +403,101 @@ class MainWindow:
         channels_combo.current(1)  # Default to stereo (2 channels)
 
         # Channel Map
+        # Channel Map — preset dropdown + custom entry. The map tells
+        # PulseAudio which speaker each audio channel corresponds to
+        # (front-left, front-right, etc). Without it, PA picks a default
+        # based on channel count, but for surround setups the user often
+        # wants explicit control.
         ttk.Label(self.advanced_frame, text="Channel Map:").grid(
             row=3, column=0, sticky=tk.W, pady=5
         )
-        self.channel_map_var = tk.StringVar()
-        channel_map_entry = ttk.Entry(self.advanced_frame, textvariable=self.channel_map_var, width=30)
-        channel_map_entry.grid(row=3, column=1, sticky=(tk.W, tk.E), padx=5, pady=5)
+        # The map labels are "preset name — channel_layout". We split on
+        # ' — ' to get back the layout string. Custom is a sentinel
+        # that shows the entry below.
+        self.channel_map_presets = [
+            ("Default (PA picks based on channel count)", ""),
+            ("Mono (1 ch)", "mono"),
+            ("Stereo (2 ch, FL+FR)", "front-left,front-right"),
+            ("2.1 Stereo (FL+FR+LFE)", "front-left,front-right,lfe"),
+            ("Quad (4 ch, FL+FR+RL+RR)", "front-left,front-right,rear-left,rear-right"),
+            ("Surround 4.0 (FL+FR+FC+RC)",
+             "front-left,front-right,front-center,rear-center"),
+            ("Surround 5.0 (FL+FR+FC+RL+RR)",
+             "front-left,front-right,front-center,rear-left,rear-right"),
+            ("Surround 5.1 (FL+FR+FC+LFE+RL+RR)",
+             "front-left,front-right,front-center,lfe,rear-left,rear-right"),
+            ("Surround 6.0 (FL+FR+FC+RC+SL+SR)",
+             "front-left,front-right,front-center,rear-center,side-left,side-right"),
+            ("Surround 6.1 (FL+FR+FC+LFE+RC+SL+SR)",
+             "front-left,front-right,front-center,lfe,rear-center,side-left,side-right"),
+            ("Surround 7.1 (FL+FR+FC+LFE+RL+RR+SL+SR)",
+             "front-left,front-right,front-center,lfe,rear-left,rear-right,side-left,side-right"),
+            ("Custom (type below)", "__custom__"),
+        ]
+        self.channel_map_preset_var = tk.StringVar(
+            value=self.channel_map_presets[1][0]  # default to Stereo
+        )
+        self.channel_map_combo = ttk.Combobox(
+            self.advanced_frame,
+            textvariable=self.channel_map_preset_var,
+            values=[p[0] for p in self.channel_map_presets],
+            state="readonly",
+            width=30,
+        )
+        self.channel_map_combo.grid(row=3, column=1, sticky=tk.W, padx=5, pady=5)
+        self.channel_map_combo.bind(
+            "<<ComboboxSelected>>", self._on_channel_map_preset_change
+        )
+        # The underlying channel_map text (what gets sent to pactl)
+        self.channel_map_var = tk.StringVar(value="front-left,front-right")
+        # Custom entry — hidden unless "Custom" is selected
+        self.channel_map_custom_entry = ttk.Entry(
+            self.advanced_frame, textvariable=self.channel_map_var, width=30
+        )
+        # Initially hidden
+        self.channel_map_custom_var = tk.StringVar()  # for trace
 
-        # Additional Properties
+        # Update default map when channels preset changes (Stereo is
+        # the natural default for 2 channels, etc.)
+        def _on_channels_change_default_map(*_):
+            try:
+                ch = int(self.channels_var.get())
+            except (ValueError, tk.TclError):
+                return
+            # Don't override user custom choice
+            if self.channel_map_preset_var.get().startswith("Custom"):
+                return
+            # Match by channel count to a sensible default
+            defaults = {
+                1: "mono",
+                2: "front-left,front-right",
+                3: "front-left,front-right,front-center",
+                4: "front-left,front-right,rear-left,rear-right",
+                5: "front-left,front-right,front-center,rear-left,rear-right",
+                6: "front-left,front-right,front-center,lfe,rear-left,rear-right",
+                8: "front-left,front-right,front-center,lfe,rear-left,rear-right,side-left,side-right",
+            }
+            default_map = defaults.get(ch)
+            if not default_map:
+                return
+            # Find a matching preset by map string
+            for label, layout in self.channel_map_presets:
+                if layout == default_map:
+                    self.channel_map_preset_var.set(label)
+                    break
+            self.channel_map_var.set(default_map)
+
+        self.channels_var.trace_add("write", _on_channels_change_default_map)
+
+        # Additional Properties (moved to row 5 to make room for
+        # the custom channel-map entry that appears below the
+        # channel-map combo when "Custom" is selected).
         ttk.Label(self.advanced_frame, text="Additional Properties:").grid(
-            row=4, column=0, sticky=tk.W, pady=5
+            row=5, column=0, sticky=tk.W, pady=5
         )
         self.properties_var = tk.StringVar()
         properties_entry = ttk.Entry(self.advanced_frame, textvariable=self.properties_var, width=30)
-        properties_entry.grid(row=4, column=1, sticky=(tk.W, tk.E), padx=5, pady=5)
+        properties_entry.grid(row=5, column=1, sticky=(tk.W, tk.E), padx=5, pady=5)
 
         # Properties help label
         ttk.Label(
@@ -407,7 +505,7 @@ class MainWindow:
             text="e.g., device.description='My Custom Sink'",
             font=("", 8, "italic"),
             foreground="gray"
-        ).grid(row=5, column=1, sticky=tk.W, padx=5, pady=(0, 5))
+        ).grid(row=6, column=1, sticky=tk.W, padx=5, pady=(0, 5))
 
         # Configure advanced frame grid
         self.advanced_frame.columnconfigure(1, weight=1)
@@ -1111,6 +1209,40 @@ class MainWindow:
             command=self._copy_selected_capture_node_name, width=15,
         ).pack(side=tk.LEFT, padx=5)
 
+        # --- Route to output ---
+        # Lets the user pick a hardware output for the selected app's
+        # audio. Creates a module-loopback from the app's monitor source
+        # to the chosen sink, so the audio is heard on that output.
+        # Simpler than going to Manage tab to set up routing manually.
+        route_frame = ttk.LabelFrame(
+            outer, text="Route App Audio To Output", padding="10"
+        )
+        route_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(
+            route_frame,
+            text=(
+                "Pick a hardware output below and click 'Route Here' — the "
+                "selected app's audio will be heard on that output. Use the "
+                "Manage tab for more complex routing (multiple outputs, etc)."
+            ),
+            wraplength=700,
+        ).pack(anchor=tk.W, pady=(0, 5))
+        route_row = ttk.Frame(route_frame)
+        route_row.pack(fill=tk.X)
+        self.capture_route_var = tk.StringVar(value="")
+        self.capture_route_combo = ttk.Combobox(
+            route_row, textvariable=self.capture_route_var,
+            state="readonly", values=(), width=50,
+        )
+        self.capture_route_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        self.capture_route_button = ttk.Button(
+            route_row, text="Route Here", width=12,
+            command=self._on_capture_route_clicked, state="disabled",
+        )
+        self.capture_route_button.pack(side=tk.LEFT, padx=5)
+        # Populate output list now (doesn't depend on selection)
+        self._populate_capture_route_options()
+
         # Selected node display
         selected_frame = ttk.LabelFrame(
             outer, text="Selected Stream", padding="10"
@@ -1125,6 +1257,126 @@ class MainWindow:
 
         # Initial discovery
         self._refresh_capture_tree()
+
+    def _populate_capture_route_options(self):
+        """Refresh the Route To combo with current hardware outputs."""
+        try:
+            outputs = PactlRunner.list_hardware_outputs()
+        except Exception as e:
+            outputs = []
+            self.add_output(f"Capture route: failed to list outputs: {e}")
+        self.capture_route_combo.config(values=outputs)
+        if outputs:
+            self.capture_route_var.set(outputs[0])
+        else:
+            self.capture_route_var.set("")
+
+    def _on_capture_route_clicked(self):
+        """Route the selected app's audio to the chosen hardware output.
+
+        We need the app's monitor source to create a loopback. The
+        Stream/Output/Audio node itself isn't routable directly — we
+        need to look up the .monitor source for the sink or use the
+        node's monitor source. Since the discovery gives us Stream
+        nodes (apps producing audio), the audio is going to a real
+        sink already; we need to either:
+        1. Use the app's current sink's monitor source and create a
+           loopback to the chosen output (this REDIRECTS the audio).
+        2. Use pw-link to manipulate the graph (more invasive).
+
+        The cleanest UX is approach #1: find what sink the app's
+        Stream/Output/Audio node is connected to, then loopback
+        that sink's monitor to the chosen output. This duplicates
+        the audio rather than replacing it (no audio loss).
+        """
+        sel = self.capture_tree.selection()
+        if not sel:
+            messagebox.showinfo("Route App Audio", "Select a stream first.")
+            return
+        target = self.capture_route_var.get()
+        if not target:
+            messagebox.showinfo(
+                "Route App Audio",
+                "No output selected. Pick one from the dropdown.",
+            )
+            return
+        # Find the sink that the selected Stream/Output/Audio node is
+        # connected to. We need its monitor source to loopback from.
+        values = self.capture_tree.item(sel[0])["values"]
+        if not values:
+            return
+        pw_id, app_str, cls, name = values
+        # Look up via pw-dump / pactl
+        try:
+            sink_name = self._find_sink_for_stream_node(int(pw_id))
+        except Exception as e:
+            sink_name = None
+            self.add_output(f"Capture route: could not find sink: {e}")
+        if not sink_name:
+            messagebox.showerror(
+                "Route failed",
+                f"Could not find the sink that app '{app_str}' is using. "
+                "Try refreshing the list, or use the Manage tab to route "
+                "manually.",
+            )
+            return
+        monitor = PactlRunner.monitor_source_for(sink_name)
+        if not monitor:
+            messagebox.showerror(
+                "Route failed",
+                f"Could not find monitor source for sink '{sink_name}'.",
+            )
+            return
+        # Check for existing loopback from this monitor to target
+        existing = PactlRunner.list_loopbacks()
+        for lb in existing:
+            if lb.get("source") == monitor and lb.get("sink") == target:
+                messagebox.showinfo(
+                    "Already routed",
+                    f"'{app_str}' is already routed to '{target}'.",
+                )
+                return
+        lb_id = PactlRunner.create_loopback(sink_name, target, logger=self.add_output)
+        if lb_id:
+            self.add_output(
+                f"Routed '{app_str}' (via {sink_name}) → '{target}' "
+                f"(loopback #{lb_id})"
+            )
+            self.refresh_all_views()
+        else:
+            messagebox.showerror(
+                "Route failed", f"Could not create loopback to '{target}'."
+            )
+
+    def _find_sink_for_stream_node(self, pw_node_id: int) -> Optional[str]:
+        """Look up the PulseAudio sink name for a given PW node ID.
+
+        Strategy: enumerate `pactl list sink-inputs` and find the
+        entry whose owning client matches the PW node's client.
+        """
+        # Use pactl to find sink-inputs with the matching client.
+        # The PW node ID for a Stream/Output/Audio is unique per
+        # stream. We match via the application name parsed from
+        # the treeview (more robust).
+        # For now, since the treeview already gave us the Stream's
+        # application, look up the application's sink-input.
+        sink_inputs = PactlRunner.run_command(["list", "sink-inputs"])
+        if not sink_inputs:
+            return None
+        # Walk through the output looking for "Sink:" lines and
+        # matching index. The Stream/Output/Audio node is a
+        # sink-input; its Sink: line tells us which sink it's
+        # playing through.
+        out, _ = sink_inputs
+        current_sink = None
+        for line in out.splitlines():
+            if line.startswith("Sink: "):
+                current_sink = line.split("#", 1)[-1].strip()
+            if line.startswith("Sink Input #"):
+                idx = line.split("#", 1)[-1].strip()
+                if str(idx) == str(pw_node_id) and current_sink:
+                    return current_sink
+        return None
 
     def _refresh_capture_tree(self):
         """Re-scan for current app audio streams and rebuild the tree."""
@@ -1160,14 +1412,21 @@ class MainWindow:
         sel = self.capture_tree.selection()
         if not sel:
             self.capture_selected_var.set("(no stream selected)")
+            self.capture_route_button.config(state="disabled")
             return
         values = self.capture_tree.item(sel[0])["values"]
         if not values:
+            self.capture_route_button.config(state="disabled")
             return
         pw_id, app, cls, name = values
         self.capture_selected_var.set(
             f"PW ID: {pw_id}    Class: {cls}    Name: {name}"
         )
+        # Only enable Route Here for output streams (apps producing audio)
+        if cls == "Stream/Output/Audio":
+            self.capture_route_button.config(state="normal")
+        else:
+            self.capture_route_button.config(state="disabled")
 
     def _copy_selected_capture_node_id(self):
         sel = self.capture_tree.selection()
@@ -1185,227 +1444,6 @@ class MainWindow:
         name = self.capture_tree.item(sel[0])["values"][3]
         self._copy_to_clipboard(str(name), label=f"Node name {name}")
 
-
-    def setup_hardware_tab(self):
-        """Set up the Hardware tab (Phase 5c: card profile management).
-
-        Lists all audio cards (USB, HDMI, BT, motherboard) and their
-        available profiles. The user can switch a card's active profile
-        — useful for:
-
-        - BT headsets: codec switching (HFP <-> A2DP <-> LDAC). BT codecs
-          expose as profiles like "headset_head_unit" or "a2dp_sink".
-        - HDMI/USB: switching between 2.0, 5.1, 7.1 surround output.
-        - Pro audio: switching to "pro-audio" profile for low-latency
-          studio work where the regular consumer profile adds latency.
-
-        Profile switching is rarely needed day-to-day, but when you DO
-        need it, you usually need it badly — and finding the right
-        profile in pavucontrol/alsamixer is painful.
-        """
-        outer = self._setup_scrollable_tab(self.hardware_tab, padding="10")
-
-        ttk.Label(
-            outer,
-            text=(
-                "Audio cards (hardware devices) on this system, with their "
-                "available profiles. Selecting a card shows its profiles; "
-                "click 'Activate' to switch. Active profile is marked."
-            ),
-            wraplength=700,
-        ).pack(anchor=tk.W, pady=(0, 10))
-
-        # Top section: card list (left) + profile list (right)
-        body = ttk.Frame(outer)
-        body.pack(fill=tk.BOTH, expand=True)
-
-        # Card list
-        card_frame = ttk.LabelFrame(body, text="Cards", padding="5")
-        card_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=(0, 5))
-        card_list_frame = ttk.Frame(card_frame)
-        card_list_frame.pack(fill=tk.BOTH, expand=True)
-        self.hardware_card_listbox = tk.Listbox(
-            card_list_frame, height=8, width=50, exportselection=False
-        )
-        self.hardware_card_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        card_scroll = ttk.Scrollbar(
-            card_list_frame, orient=tk.VERTICAL,
-            command=self.hardware_card_listbox.yview,
-        )
-        card_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        self.hardware_card_listbox.configure(yscrollcommand=card_scroll.set)
-        self.hardware_card_listbox.bind(
-            "<<ListboxSelect>>", self._on_hardware_card_selected
-        )
-
-        card_buttons = ttk.Frame(card_frame)
-        card_buttons.pack(fill=tk.X, pady=(5, 0))
-        ttk.Button(
-            card_buttons, text="Refresh",
-            command=self._refresh_hardware_cards, width=12,
-        ).pack(side=tk.LEFT)
-
-        # Profile list
-        profile_frame = ttk.LabelFrame(body, text="Profiles", padding="5")
-        profile_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(5, 0))
-        profile_list_frame = ttk.Frame(profile_frame)
-        profile_list_frame.pack(fill=tk.BOTH, expand=True)
-        self.hardware_profile_listbox = tk.Listbox(
-            profile_list_frame, height=8, exportselection=False
-        )
-        self.hardware_profile_listbox.pack(
-            side=tk.LEFT, fill=tk.BOTH, expand=True
-        )
-        profile_scroll = ttk.Scrollbar(
-            profile_list_frame, orient=tk.VERTICAL,
-            command=self.hardware_profile_listbox.yview,
-        )
-        profile_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        self.hardware_profile_listbox.configure(
-            yscrollcommand=profile_scroll.set
-        )
-
-        # Profile details / activate button
-        details_frame = ttk.Frame(profile_frame)
-        details_frame.pack(fill=tk.X, pady=(5, 0))
-        self.hardware_profile_details_var = tk.StringVar(
-            value="Select a card to see its profiles"
-        )
-        ttk.Label(
-            details_frame, textvariable=self.hardware_profile_details_var,
-            wraplength=400,
-        ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
-        self.hardware_activate_button = ttk.Button(
-            details_frame, text="Activate Profile",
-            command=self._on_hardware_activate_profile,
-            state="disabled", width=15,
-        )
-        self.hardware_activate_button.pack(side=tk.LEFT)
-
-        # Cache of cards data keyed by index for selection lookup
-        self._hardware_cards: List[Dict[str, Any]] = []
-
-        # Initial load
-        self._refresh_hardware_cards()
-
-    def _refresh_hardware_cards(self):
-        """Reload the card list from pactl."""
-        try:
-            self._hardware_cards = PactlRunner.list_cards()
-        except Exception as e:
-            messagebox.showerror(
-                "Hardware error", f"Failed to enumerate cards: {e}"
-            )
-            self._hardware_cards = []
-        self.hardware_card_listbox.delete(0, tk.END)
-        for c in self._hardware_cards:
-            label = c.get("description") or c.get("name", "?")
-            active = c.get("active_profile", "")
-            if active:
-                # Trim long profile names for display
-                short = active.split("+")[0]
-                label = f"{label}    [active: {short}]"
-            self.hardware_card_listbox.insert(tk.END, label)
-        self.add_output(
-            f"Hardware: discovered {len(self._hardware_cards)} card(s)"
-        )
-        # Clear profile list
-        self.hardware_profile_listbox.delete(0, tk.END)
-        self.hardware_profile_details_var.set(
-            "Select a card to see its profiles"
-        )
-        self.hardware_activate_button.config(state="disabled")
-
-    def _on_hardware_card_selected(self, _event=None):
-        """Populate the profile list when a card is selected."""
-        sel = self.hardware_card_listbox.curselection()
-        if not sel:
-            return
-        idx = sel[0]
-        if idx >= len(self._hardware_cards):
-            return
-        card = self._hardware_cards[idx]
-        # Populate profile listbox
-        self.hardware_profile_listbox.delete(0, tk.END)
-        for p in card.get("profiles", []):
-            marker = " ★ " if p["name"] == card.get("active_profile") else "   "
-            avail_tag = "" if p["available"] else " (unavailable)"
-            label = (
-                f"{marker}{p['name']}{avail_tag}\n"
-                f"     {p['description']} "
-                f"(sinks={p['sinks']}, sources={p['sources']}, "
-                f"priority={p['priority']})"
-            )
-            self.hardware_profile_listbox.insert(tk.END, label)
-        # Enable the Activate button once profiles are loaded — without
-        # this, the button stays disabled forever (bug — fixed here).
-        self.hardware_activate_button.config(state="normal")
-        # Reset details label so it doesn't show stale info
-        self.hardware_profile_details_var.set(
-            "Select a profile and click Activate Profile to switch."
-        )
-        self.add_output(
-            f"Hardware: card '{card.get('description')}' has "
-            f"{len(card.get('profiles', []))} profile(s); "
-            f"active='{card.get('active_profile', '')}'"
-        )
-
-    def _on_hardware_activate_profile(self):
-        """Switch the selected card's profile to the highlighted one."""
-        sel_card = self.hardware_card_listbox.curselection()
-        sel_profile = self.hardware_profile_listbox.curselection()
-        if not sel_card or not sel_profile:
-            messagebox.showinfo(
-                "Activate Profile",
-                "Select a card and a profile first.",
-            )
-            return
-        card = self._hardware_cards[sel_card[0]]
-        profile_idx = sel_profile[0]
-        if profile_idx >= len(card.get("profiles", [])):
-            return
-        profile = card["profiles"][profile_idx]
-        if profile["name"] == card.get("active_profile"):
-            messagebox.showinfo(
-                "Activate Profile",
-                f"'{profile['name']}' is already active.",
-            )
-            return
-        if not profile["available"]:
-            if not messagebox.askyesno(
-                "Profile unavailable",
-                f"'{profile['name']}' is marked unavailable by PA/PipeWire. "
-                "It might activate but could fail or degrade. Try anyway?",
-            ):
-                return
-        # Confirm
-        if not messagebox.askyesno(
-            "Activate profile",
-            f"Switch '{card.get('description')}' to "
-            f"'{profile['description']}' ({profile['name']})?\n\n"
-            "Note: this may briefly disconnect running audio streams "
-            "using the current profile.",
-        ):
-            return
-        # Apply
-        ok = PactlRunner.set_card_profile(
-            card["name"], profile["name"], logger=self.add_output
-        )
-        if ok:
-            self.add_output(
-                f"Hardware: switched '{card.get('description')}' to "
-                f"profile '{profile['name']}'"
-            )
-            self.status_var.set(
-                f"Switched {card.get('description')} to {profile['name']}"
-            )
-            self._refresh_hardware_cards()
-        else:
-            messagebox.showerror(
-                "Profile switch failed",
-                f"pactl refused to switch to '{profile['name']}'. "
-                "Check the Output tab for stderr.",
-            )
 
     def setup_diagnostics_tab(self):
         """Set up the Diagnostics tab (Phase 7).
@@ -2497,6 +2535,31 @@ class MainWindow:
             width=10,
         ).grid(row=2, column=1, padx=5, pady=(2, 5), sticky=tk.W)
 
+        # --- Card profile (shown for hardware sinks only) ---
+        # Lets the user switch the active profile of the underlying card
+        # (BT codec change, HDMI 2.0 <-> 5.1, USB pro-audio mode).
+        # Replaces the old Hardware tab — the profile is most useful
+        # right next to the device controls it affects.
+        ttk.Label(parent, text="Card Profile:").grid(
+            row=3, column=0, sticky=tk.W, padx=5, pady=2
+        )
+        self.card_profile_var = tk.StringVar(value="")
+        self.card_profile_combo = ttk.Combobox(
+            parent,
+            textvariable=self.card_profile_var,
+            state="disabled",
+            values=(),
+            width=50,
+        )
+        self.card_profile_combo.grid(
+            row=3, column=1, columnspan=2, sticky=tk.EW, padx=5, pady=2
+        )
+        self.card_profile_combo.bind(
+            "<<ComboboxSelected>>", self._on_card_profile_change
+        )
+        # Internal: map combobox display label -> profile name
+        self._card_profile_map: Dict[str, str] = {}
+
         # Stretch the slider column
         parent.columnconfigure(1, weight=1)
 
@@ -2518,6 +2581,7 @@ class MainWindow:
             self.device_mute_check.config(state="disabled")
             self.set_default_button.config(state="disabled")
             self.device_volume_label.config(text="—")
+            self._set_card_profile_combo(None)
             return
 
         self._device_controls_sink_name = entity_name
@@ -2555,6 +2619,117 @@ class MainWindow:
             self.set_default_button.config(state="disabled")
         else:
             self.set_default_button.config(state="normal")
+        # Card profile: hardware sinks (alsa_output.* / alsa_input.*)
+        # have an underlying alsa_card.* with selectable profiles.
+        # Virtual sinks (PulseAudio_NULL_*) don't, so the combo
+        # stays disabled.
+        self._set_card_profile_combo(entity_name)
+
+    def _set_card_profile_combo(self, entity_name):
+        """Populate the Card Profile combobox for the selected entity.
+
+        If the entity is a hardware sink (alsa_output.* or alsa_input.*),
+        find the matching alsa_card.* and list its profiles. Otherwise
+        (virtual sink, source, none) clear and disable the combo.
+
+        The combo display format is '<name> (<description>)' and the
+        selected display label is mapped back to the profile name
+        via self._card_profile_map.
+        """
+        self._card_profile_map = {}
+        if not entity_name or not entity_name.startswith("alsa_"):
+            self.card_profile_combo.config(values=(), state="disabled")
+            self.card_profile_var.set("")
+            return
+        # Find the matching card. We use a heuristic: match by the
+        # description in the device list. This is more robust than
+        # parsing the alsa naming scheme (which differs between
+        # output/input formats).
+        try:
+            sinks = PactlRunner.list_sinks()
+            sink_desc = next(
+                (s.get("description", "") for s in sinks if s.get("name") == entity_name),
+                "",
+            )
+            if not sink_desc:
+                self.card_profile_combo.config(values=(), state="disabled")
+                self.card_profile_var.set("")
+                return
+            cards = PactlRunner.list_cards()
+            card = next(
+                (c for c in cards if c.get("description") == sink_desc),
+                None,
+            )
+            if not card or not card.get("profiles"):
+                self.card_profile_combo.config(values=(), state="disabled")
+                self.card_profile_var.set("")
+                return
+            # Build display labels: "profile_name — description"
+            labels = []
+            active_label = ""
+            for p in card["profiles"]:
+                avail_tag = "" if p["available"] else " (unavailable)"
+                label = f"{p['name']}{avail_tag} — {p['description']}"
+                labels.append(label)
+                self._card_profile_map[label] = p["name"]
+                if p["name"] == card.get("active_profile"):
+                    active_label = label
+            self.card_profile_combo.config(values=labels, state="readonly")
+            self.card_profile_var.set(active_label)
+        except Exception as e:
+            self.add_output(f"Card profile lookup failed: {e}")
+            self.card_profile_combo.config(values=(), state="disabled")
+            self.card_profile_var.set("")
+
+    def _on_card_profile_change(self, _event=None):
+        """Apply the selected card profile when the user picks one."""
+        name = self._device_controls_sink_name
+        if not name:
+            return
+        selected_label = self.card_profile_var.get()
+        profile_name = self._card_profile_map.get(selected_label)
+        if not profile_name:
+            return  # User typed something invalid
+        # Don't prompt if it's already active
+        sink_desc = ""
+        card = None
+        try:
+            cards = PactlRunner.list_cards()
+            sinks = PactlRunner.list_sinks()
+            sink_desc = next(
+                (s.get("description", "") for s in sinks if s.get("name") == name),
+                "",
+            )
+            card = next(
+                (c for c in cards if c.get("description") == sink_desc),
+                None,
+            )
+            if card and card.get("active_profile") == profile_name:
+                return  # Already active, nothing to do
+        except Exception:
+            pass
+        if not messagebox.askyesno(
+            "Switch card profile",
+            f"Switch '{sink_desc}' card to profile '{profile_name}'?\n\n"
+            "Note: this may briefly disconnect running audio streams.",
+        ):
+            # Reset combo to active profile
+            self._set_card_profile_combo(name)
+            return
+        ok = PactlRunner.set_card_profile(
+            card["name"], profile_name, logger=self.add_output
+        ) if card else False
+        if ok:
+            self.add_output(
+                f"Card profile switched: {sink_desc} → {profile_name}"
+            )
+            self.refresh_all_views()
+        else:
+            messagebox.showerror(
+                "Profile switch failed",
+                f"pactl refused to switch to '{profile_name}'.",
+            )
+            self._set_card_profile_combo(name)
 
     def _on_volume_scale_change(self, _value):
         """Slider drag — set the sink/source volume live."""
@@ -3388,14 +3563,41 @@ class MainWindow:
         else:
             self.status_var.set("Showing only virtual and hardware devices")
 
+    def _on_channel_map_preset_change(self, _event=None):
+        """When the user picks a channel-map preset, update the underlying
+        channel_map_var and show/hide the custom entry field."""
+        label = self.channel_map_preset_var.get()
+        for preset_label, layout in self.channel_map_presets:
+            if preset_label == label:
+                if layout == "__custom__":
+                    # Show the custom entry
+                    self.channel_map_custom_entry.grid(
+                        row=4, column=1, sticky=(tk.W, tk.E), padx=5, pady=5
+                    )
+                else:
+                    # Hide the custom entry (if visible)
+                    self.channel_map_custom_entry.grid_remove()
+                    self.channel_map_var.set(layout)
+                break
+
     def toggle_advanced_options(self):
-        """Toggle the visibility of advanced options."""
+        """Toggle the visibility of advanced options.
+
+        Bug fix: the toggle and the frame were both placed at row=4,
+        so when the frame was shown it OVERLAPPED the toggle, making
+        the checkbox invisible. Now the toggle lives ABOVE the frame
+        (toggle at one row, frame at the next) so they don't fight.
+        """
         if self.show_advanced_var.get():
-            # Show advanced options
-            self.advanced_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+            # Show advanced options — the frame goes below the toggle.
+            # The toggle itself stays at its original row.
+            self.advanced_frame.grid(
+                row=self._advanced_frame_row,
+                column=0, columnspan=2,
+                sticky=(tk.W, tk.E), pady=(0, 10),
+            )
             self.advanced_toggle.config(text="Hide Advanced Options")
         else:
-            # Hide advanced options
             self.advanced_frame.grid_remove()
             self.advanced_toggle.config(text="Show Advanced Options")
 

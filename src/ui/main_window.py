@@ -95,37 +95,43 @@ class MainWindow:
 
         self.root.config(menu=menubar)
 
-    def setup_create_tab(self):
-        """Set up the Create tab content."""
-        # Wrap content in a Canvas+Scrollbar so it scrolls when the window
-        # is shorter than the content. The actual widgets live on `frame`,
-        # which is a window inside the canvas.
-        canvas = tk.Canvas(self.create_tab, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(
-            self.create_tab, orient=tk.VERTICAL, command=canvas.yview
-        )
+    def _setup_scrollable_tab(self, tab, padding=""):
+        """Wrap a notebook tab in a Canvas+Scrollbar so it scrolls vertically
+        when the window is shorter than the content.
+
+        Returns the inner Frame (placed inside the canvas) where the caller
+        should add its widgets. The scroll region auto-updates when the
+        inner frame's contents change size, and mouse-wheel scrolling is
+        bound while the cursor is over the tab.
+
+        Args:
+            tab: The ttk.Frame (notebook tab) to make scrollable.
+            padding: Tkinter padding string for the inner frame (e.g. "10"
+                     to match a direct pack'd frame with padding=10).
+
+        Returns:
+            The inner ttk.Frame inside the canvas.
+        """
+        canvas = tk.Canvas(tab, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(tab, orient=tk.VERTICAL, command=canvas.yview)
         canvas.configure(yscrollcommand=scrollbar.set)
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        frame = ttk.Frame(canvas, padding="10")
-        frame_window = canvas.create_window((0, 0), window=frame, anchor=tk.NW)
+        inner = ttk.Frame(canvas, padding=padding)
+        inner_window = canvas.create_window((0, 0), window=inner, anchor=tk.NW)
 
-        # Update scrollregion when frame contents change size
-        def _on_frame_configure(event):
+        def _on_inner_configure(_event):
             canvas.configure(scrollregion=canvas.bbox("all"))
 
-        # Make the inner frame match the canvas width so widgets fill horizontally
         def _on_canvas_configure(event):
-            canvas.itemconfigure(frame_window, width=event.width)
+            canvas.itemconfigure(inner_window, width=event.width)
 
-        frame.bind("<Configure>", _on_frame_configure)
+        inner.bind("<Configure>", _on_inner_configure)
         canvas.bind("<Configure>", _on_canvas_configure)
 
-        # Mouse-wheel scrolling — bound to canvas and propagated to the inner
-        # frame so scrolling works wherever the cursor is over the tab.
         def _on_mousewheel(event):
-            # event.delta is non-zero on macOS/Windows; num is for X11
+            # macOS/Windows: event.delta. X11: num 4 (up) / 5 (down).
             if event.delta:
                 delta = -1 * (event.delta // 120)
             elif event.num == 4:
@@ -149,6 +155,12 @@ class MainWindow:
 
         canvas.bind("<Enter>", _bind_wheel)
         canvas.bind("<Leave>", _unbind_wheel)
+
+        return inner
+
+    def setup_create_tab(self):
+        """Set up the Create tab content."""
+        frame = self._setup_scrollable_tab(self.create_tab, padding="10")
 
         # Add descriptive label
         ttk.Label(
@@ -418,8 +430,12 @@ class MainWindow:
 
     def setup_manage_tab(self):
         """Set up the Manage tab content with simplified category-based view."""
-        frame = ttk.Frame(self.manage_tab, padding="10")
-        frame.pack(fill=tk.BOTH, expand=True)
+        # Wrap the tab in a scrollable canvas so the whole tab scrolls
+        # vertically when the window is shorter than the content. The inner
+        # `frame` hosts the stacked panels (tree, buttons, routing, details);
+        # the inner-frame height grows with its contents and the canvas
+        # provides the scrollbar.
+        frame = self._setup_scrollable_tab(self.manage_tab, padding="10")
 
         # Add Show System Modules checkbox
         self.show_system_var = tk.BooleanVar(value=False)
@@ -490,7 +506,7 @@ class MainWindow:
         self.unified_tree.bind("<<TreeviewSelect>>", self.on_unified_tree_select)
 
         # Button frame
-        button_frame = ttk.Frame(self.manage_tab, padding="5")
+        button_frame = ttk.Frame(frame, padding="5")
         button_frame.pack(fill=tk.X, pady=5)
 
         # Action buttons
@@ -511,7 +527,7 @@ class MainWindow:
         self.remove_null_sinks_button.pack(side=tk.LEFT, padx=5)
 
         # Routing frame — lets the user wire a selected virtual sink to a real output
-        self.routing_frame = ttk.LabelFrame(self.manage_tab, text="Routing")
+        self.routing_frame = ttk.LabelFrame(frame, text="Routing")
         self.routing_frame.pack(fill=tk.X, padx=10, pady=5)
 
         # Status line
@@ -556,7 +572,7 @@ class MainWindow:
         self.routing_frame.columnconfigure(1, weight=1)
 
         # Details frame with scrollable text widget and toggle
-        details_frame = ttk.LabelFrame(self.manage_tab, text="Details")
+        details_frame = ttk.LabelFrame(frame, text="Details")
         details_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
         # Details toggle frame

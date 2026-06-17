@@ -103,21 +103,50 @@ class MainWindow:
         # Add descriptive label
         ttk.Label(
             frame,
-            text="Create a new Audio/Duplex null sink",
+            text="Create a new virtual audio device",
             font=("", 12, "bold")
         ).grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 10))
 
+        # Device type radio (Sink / Source / Both)
+        # Default to "both" (duplex) for backward compatibility with existing users.
+        type_frame = ttk.LabelFrame(frame, text="Device Type", padding="10")
+        type_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+
+        self.device_type_var = tk.StringVar(value="both")
+        ttk.Radiobutton(
+            type_frame,
+            text="Sink only — apps play to this device (e.g. game_sink, music_sink)",
+            variable=self.device_type_var,
+            value="sink",
+            command=self.on_device_type_changed,
+        ).grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=2)
+        ttk.Radiobutton(
+            type_frame,
+            text="Source only — apps record from this device (e.g. capture target)",
+            variable=self.device_type_var,
+            value="source",
+            command=self.on_device_type_changed,
+        ).grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=2)
+        ttk.Radiobutton(
+            type_frame,
+            text="Both (duplex) — apps play AND record from this device",
+            variable=self.device_type_var,
+            value="both",
+            command=self.on_device_type_changed,
+        ).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=2)
+
         # Add format example label
-        ttk.Label(
+        self.command_format_label = ttk.Label(
             frame,
-            text="Format: media.class=Audio/Duplex sink_name=<name> channels=<channels>",
+            text="Format: pactl load-module module-null-sink media.class=Audio/Duplex sink_name=<name> channels=<channels>",
             font=("", 9, "italic"),
             foreground="gray"
-        ).grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=(0, 10))
+        )
+        self.command_format_label.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(0, 10))
 
         # Basic Options Section
         basic_frame = ttk.LabelFrame(frame, text="Basic Options", padding="10")
-        basic_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        basic_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
 
         # Sink name
         ttk.Label(basic_frame, text="Sink Name (optional):").grid(
@@ -202,7 +231,7 @@ class MainWindow:
             variable=self.show_advanced_var,
             command=self.toggle_advanced_options
         )
-        advanced_toggle.grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=(10, 5))
+        advanced_toggle.grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=(10, 5))
 
         # Advanced options frame (initially hidden)
         self.advanced_frame = ttk.LabelFrame(frame, text="Advanced Options", padding="10")
@@ -296,16 +325,16 @@ class MainWindow:
         self.advanced_frame.columnconfigure(1, weight=1)
 
         # Create button
-        create_button = ttk.Button(
+        self.create_button = ttk.Button(
             frame,
-            text="Create Duplex Sink",
-            command=self.create_duplex_sink
+            text="Create Both (Duplex) Sink",
+            command=self.create_device
         )
-        create_button.grid(row=6, column=0, columnspan=2, pady=20)
+        self.create_button.grid(row=7, column=0, columnspan=2, pady=20)
 
         # Output preview
         ttk.Label(frame, text="Command Preview:").grid(
-            row=7, column=0, sticky=tk.W, pady=(10, 5)
+            row=8, column=0, sticky=tk.W, pady=(10, 5)
         )
         self.command_preview_var = tk.StringVar()
         self.command_preview_var.set("pactl load-module module-null-sink media.class=Audio/Duplex sink_name=example channels=2")
@@ -329,6 +358,7 @@ class MainWindow:
         self.format_var.trace_add("write", self.update_command_preview)
         self.channel_map_var.trace_add("write", self.update_command_preview)
         self.properties_var.trace_add("write", self.update_command_preview)
+        self.device_type_var.trace_add("write", self.update_command_preview)
 
         # Configure grid
         frame.columnconfigure(1, weight=1)
@@ -536,44 +566,67 @@ class MainWindow:
             self.output_text.delete(1.0, tk.END)
             self.add_output("Output cleared.")
 
-    def create_duplex_sink(self):
-        """Create a new duplex sink based on user input."""
+    def on_device_type_changed(self):
+        """Update button label, command preview format, and status when device type radio changes."""
+        device_type = self.device_type_var.get()
+        if device_type == "sink":
+            button_text = "Create Sink-Only Device"
+            media_class = "Audio/Sink"
+        elif device_type == "source":
+            button_text = "Create Source-Only Device"
+            media_class = "Audio/Source"
+        else:  # "both"
+            button_text = "Create Both (Duplex) Sink"
+            media_class = "Audio/Duplex"
+
+        self.create_button.config(text=button_text)
+        self.command_format_label.config(
+            text=f"Format: pactl load-module module-null-sink "
+            f"media.class={media_class} sink_name=<name> channels=<channels>"
+        )
+        self.update_command_preview()
+
+    def create_device(self):
+        """Create a new virtual audio device of the type selected in the radio."""
+        device_type = self.device_type_var.get()
+        if device_type == "sink":
+            return self._create_device_of_type("sink")
+        elif device_type == "source":
+            return self._create_device_of_type("source")
+        else:  # "both"
+            return self._create_device_of_type("both")
+
+    def _create_device_of_type(self, device_type):
+        """Shared logic: gather inputs from the form, call the right PactlRunner method."""
         raw_name = self.sink_name_var.get().strip()
         description = self.sink_desc_var.get().strip()
 
         # Handle auto-naming
         if not raw_name or raw_name.endswith(" (auto)"):
-            # Use auto-naming based on current preset
             selected_preset = self.audio_preset_var.get()
             preset_configs = {
                 "Stereo": "stereo",
                 "Mono": "mono",
                 "5.1 Surround": "surround51",
                 "7.1 Surround": "surround71",
-                "Custom": "custom"
+                "Custom": "custom",
             }
             base_name = preset_configs.get(selected_preset, selected_preset.lower())
             name = self._get_available_name(base_name)
         else:
-            # Validate user-provided name
             is_valid, cleaned_name, error_msg = self._validate_sink_name(raw_name)
-
             if not is_valid:
-                # Show error with suggestion
                 response = messagebox.askyesno(
                     "Invalid Sink Name",
                     f"{error_msg}\n\nWould you like to use the suggested name instead?",
-                    icon="warning"
+                    icon="warning",
                 )
                 if response and cleaned_name:
-                    # User accepted suggestion
                     name = cleaned_name
-                    # Update the UI to show the corrected name
                     self.sink_name_var.set(name)
                     self.user_has_custom_name = True
                     self.sink_name_entry.config(foreground="black")
                 else:
-                    # User declined, abort creation
                     return
             else:
                 name = cleaned_name
@@ -581,63 +634,71 @@ class MainWindow:
         try:
             channels = int(self.channels_var.get())
         except ValueError:
-            channels = 2  # Default to stereo
+            channels = 2
 
         if not description:
-            # Auto-generate description based on preset if not provided
             selected_preset = self.audio_preset_var.get()
             preset_descriptions = {
                 "Stereo": "Stereo Virtual Device",
                 "Mono": "Mono Virtual Device",
                 "5.1 Surround": "5.1 Surround Virtual Device",
                 "7.1 Surround": "7.1 Surround Virtual Device",
-                "Custom": "Custom Virtual Device"
+                "Custom": "Custom Virtual Device",
             }
-            description = preset_descriptions.get(selected_preset, f"{name} Virtual Device")
+            type_label = {"sink": "Sink", "source": "Source", "both": "Duplex"}[device_type]
+            description = preset_descriptions.get(
+                selected_preset, f"{name} Virtual {type_label} Device"
+            )
 
-        # Collect advanced options if they are enabled
         advanced_options = {}
-        if hasattr(self, 'show_advanced_var') and self.show_advanced_var.get():
-            # Sample rate
+        if hasattr(self, "show_advanced_var") and self.show_advanced_var.get():
             rate = self.rate_var.get().strip()
             if rate and rate != "44100":
                 try:
-                    advanced_options['rate'] = int(rate)
+                    advanced_options["rate"] = int(rate)
                 except ValueError:
                     messagebox.showerror("Error", f"Invalid sample rate: {rate}")
                     return
-
-            # Sample format - get the actual format code from the description
             format_desc = self.format_var.get().strip()
-            if format_desc and hasattr(self, 'format_mappings'):
+            if format_desc and hasattr(self, "format_mappings"):
                 actual_format = self.format_mappings.get(format_desc, format_desc)
                 if actual_format and actual_format != "s16le":
-                    advanced_options['format'] = actual_format
-
-            # Channel map
+                    advanced_options["format"] = actual_format
             channel_map = self.channel_map_var.get().strip()
             if channel_map:
-                advanced_options['channel_map'] = channel_map
-
-            # Additional properties
+                advanced_options["channel_map"] = channel_map
             properties = self.properties_var.get().strip()
             if properties:
-                advanced_options['sink_properties'] = properties
+                advanced_options["sink_properties"] = properties
 
-        self.status_var.set(f"Creating duplex sink '{name}'...")
+        type_label = {"sink": "sink-only", "source": "source-only", "both": "duplex"}[device_type]
+        self.status_var.set(f"Creating {type_label} device '{name}'...")
         self.root.update()
 
-        success = PactlRunner.create_duplex_sink(name, description, channels, logger=self.add_output, **advanced_options)
+        if device_type == "sink":
+            success = PactlRunner.create_sink_only(
+                name, description, channels, logger=self.add_output, **advanced_options
+            )
+        elif device_type == "source":
+            success = PactlRunner.create_source_only(
+                name, description, channels, logger=self.add_output, **advanced_options
+            )
+        else:
+            success = PactlRunner.create_duplex_sink(
+                name, description, channels, logger=self.add_output, **advanced_options
+            )
 
         if success:
-            self.add_output(f"Created duplex sink: {name} ({description})")
-            self.status_var.set(f"Created duplex sink: {name}")
-            # Use the unified refresh approach
+            self.add_output(f"Created {type_label} device: {name} ({description})")
+            self.status_var.set(f"Created {type_label} device: {name}")
             self.refresh_all_views()
         else:
-            self.add_output(f"Failed to create duplex sink: {name}")
-            self.status_var.set("Error creating duplex sink")
-            messagebox.showerror("Error", f"Failed to create duplex sink: {name}")
+            self.add_output(f"Failed to create {type_label} device: {name}")
+
+    def create_duplex_sink(self):
+        """Backward-compatible alias. New code should call create_device()."""
+        self.device_type_var.set("both")
+        return self._create_device_of_type("both")
 
     def refresh_all_views(self):
         """Refresh all views with hierarchical relationships."""
@@ -1618,7 +1679,7 @@ class MainWindow:
                 "Mono": "mono",
                 "5.1 Surround": "surround51",
                 "7.1 Surround": "surround71",
-                "Custom": "custom"
+                "Custom": "custom",
             }
             base_name = preset_configs.get(selected_preset, selected_preset.lower())
             name = f"{base_name}*"  # Use * to indicate auto-naming in preview
@@ -1627,12 +1688,22 @@ class MainWindow:
 
         channels = self.channels_var.get() or "2"
 
+        # Pick media.class based on the selected device type
+        device_type = (
+            self.device_type_var.get() if hasattr(self, "device_type_var") else "both"
+        )
+        media_class = {
+            "sink": "Audio/Sink",
+            "source": "Audio/Source",
+            "both": "Audio/Duplex",
+        }[device_type]
+
         # Build the command with basic parameters
         cmd_parts = [
             "pactl load-module module-null-sink",
-            "media.class=Audio/Duplex",
+            f"media.class={media_class}",
             f"sink_name={name}",
-            f"channels={channels}"
+            f"channels={channels}",
         ]
 
         # Add advanced options if they are set and advanced options are shown

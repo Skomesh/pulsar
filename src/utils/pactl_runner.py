@@ -326,11 +326,122 @@ class PactlRunner:
         Returns:
             True if successful, False otherwise
         """
+        return PactlRunner._create_null_sink(
+            media_class='Audio/Duplex',
+            name=name,
+            description=description,
+            channels=channels,
+            rate=rate,
+            format=format,
+            channel_map=channel_map,
+            sink_properties=sink_properties,
+            logger=logger,
+        )
+
+    @staticmethod
+    def create_sink_only(
+        name: str,
+        description: str,
+        channels: int = 2,
+        rate: Optional[int] = None,
+        format: Optional[str] = None,
+        channel_map: Optional[str] = None,
+        sink_properties: Optional[str] = None,
+        logger=None
+    ) -> bool:
+        """
+        Create a sink-only null sink (no source role).
+
+        Apps can play audio to this device but cannot record from it
+        (the .monitor is not exposed as a recordable source for normal apps).
+
+        Use this when you want a routing target that goes OUT to speakers
+        or another sink — e.g. a virtual "game_sink" you wire to your
+        headphones via module-loopback.
+
+        Args:
+            Same as create_duplex_sink.
+        """
+        return PactlRunner._create_null_sink(
+            media_class='Audio/Sink',
+            name=name,
+            description=description,
+            channels=channels,
+            rate=rate,
+            format=format,
+            channel_map=channel_map,
+            sink_properties=sink_properties,
+            logger=logger,
+        )
+
+    @staticmethod
+    def create_source_only(
+        name: str,
+        description: str,
+        channels: int = 2,
+        rate: Optional[int] = None,
+        format: Optional[str] = None,
+        channel_map: Optional[str] = None,
+        sink_properties: Optional[str] = None,
+        logger=None
+    ) -> bool:
+        """
+        Create a source-only null sink (no sink role).
+
+        Apps can record from this device but cannot play audio to it.
+        Useful as a capture target for streaming/recording pipelines
+        (e.g. a virtual "mic_source" that apps can pick as their mic
+        while the actual audio is being fed in from elsewhere).
+
+        Args:
+            Same as create_duplex_sink.
+        """
+        return PactlRunner._create_null_sink(
+            media_class='Audio/Source',
+            name=name,
+            description=description,
+            channels=channels,
+            rate=rate,
+            format=format,
+            channel_map=channel_map,
+            sink_properties=sink_properties,
+            logger=logger,
+        )
+
+    @staticmethod
+    def _create_null_sink(
+        media_class: str,
+        name: str,
+        description: str,
+        channels: int = 2,
+        rate: Optional[int] = None,
+        format: Optional[str] = None,
+        channel_map: Optional[str] = None,
+        sink_properties: Optional[str] = None,
+        logger=None
+    ) -> bool:
+        """
+        Internal helper: build and run a module-null-sink load-module command.
+
+        Args:
+            media_class: One of 'Audio/Sink', 'Audio/Source', or 'Audio/Duplex'.
+            name: Sink identifier.
+            description: Human-readable description (unused in command, kept for API compat).
+            channels: Number of channels.
+            rate: Sample rate in Hz (optional).
+            format: Sample format (optional).
+            channel_map: Channel mapping (optional).
+            sink_properties: Additional sink properties (optional).
+            logger: Optional logger callback.
+
+        Returns:
+            True if the module loaded successfully (return code 0).
+        """
         # Build the command arguments
         cmd_args = [
             'load-module',
             'module-null-sink',
-            'media.class=Audio/Duplex',
+            f'media.class={media_class}',
             f'sink_name={name}',
             f'channels={channels}'
         ]

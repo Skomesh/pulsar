@@ -507,6 +507,84 @@ class MainWindow:
             foreground="gray"
         ).grid(row=6, column=1, sticky=tk.W, padx=5, pady=(0, 5))
 
+        # Loopback Latency — affects any future loopback created from
+        # this sink. Too low = robotic/crackly audio (buffer underrun).
+        # Too high = noticeable audio delay. The recommendation scales
+        # with sample rate because higher rates have tighter per-frame
+        # deadlines (21μs at 48kHz, 5μs at 192kHz) while per-frame
+        # DSP cost is roughly constant.
+        ttk.Label(self.advanced_frame, text="Loopback Latency:").grid(
+            row=7, column=0, sticky=tk.W, pady=5
+        )
+        # Build the preset list. The "Auto" option picks the
+        # recommended value based on the current sample rate, and
+        # its label updates when the rate changes. Custom shows a
+        # small entry for power users.
+        self._latency_presets = [
+            ("5 (lowest, light DSP only)", 5),
+            ("10", 10),
+            ("20 (snappy)", 20),
+            ("Auto (recommended for sample rate)", None),  # None = compute from rate
+            ("50 (safe default)", 50),
+            ("100 (heavy DSP / USB)", 100),
+            ("200 (safest)", 200),
+            ("Custom (type below)", "__custom__"),
+        ]
+        # Initial recommendation
+        try:
+            init_rate = int(self.rate_var.get())
+        except (ValueError, tk.TclError):
+            init_rate = 48000
+        init_rec = PactlRunner.recommended_loopback_latency_ms(init_rate)
+        self._latency_recommended_ms = init_rec
+        # The latency preset var holds the LABEL (string). The actual
+        # millisecond value is computed by _get_loopback_latency_ms.
+        self.latency_preset_var = tk.StringVar()
+        self.latency_combo = ttk.Combobox(
+            self.advanced_frame,
+            textvariable=self.latency_preset_var,
+            values=self._latency_preset_labels(),
+            state="readonly",
+            width=30,
+        )
+        self.latency_combo.grid(row=7, column=1, sticky=tk.W, padx=5, pady=5)
+        self.latency_combo.bind(
+            "<<ComboboxSelected>>", self._on_latency_preset_change
+        )
+        # Set initial selection to Auto (recommended) — the label says
+        # "<N> ms (recommended for sample rate)" so the user can see
+        # the actual value.
+        self.latency_preset_var.set(self._latency_auto_label())
+        # Custom entry — hidden unless "Custom" is selected
+        self.latency_var = tk.StringVar(value=str(init_rec))
+        self.latency_custom_entry = ttk.Entry(
+            self.advanced_frame, textvariable=self.latency_var, width=10
+        )
+        # Update recommended when sample rate changes
+        def _on_rate_change_recommend(*_):
+            try:
+                rate = int(self.rate_var.get())
+            except (ValueError, tk.TclError):
+                return
+            self._latency_recommended_ms = (
+                PactlRunner.recommended_loopback_latency_ms(rate)
+            )
+            # Update the "Auto" label to reflect the new rate
+            auto_label = self._latency_auto_label()
+            # If the user is currently on Auto, refresh the displayed label
+            if self.latency_preset_var.get().startswith("Auto"):
+                self.latency_preset_var.set(auto_label)
+            else:
+                # Otherwise just update the dropdown's Auto option label
+                # (Tkinter doesn't easily let us change a single value in
+                # a combobox, so we just rebuild the values list)
+                try:
+                    self.latency_combo.config(values=self._latency_preset_labels())
+                except tk.TclError:
+                    pass
+
+        self.rate_var.trace_add("write", _on_rate_change_recommend)
+
         # Configure advanced frame grid
         self.advanced_frame.columnconfigure(1, weight=1)
 
@@ -1460,7 +1538,10 @@ class MainWindow:
                     f"'{app_str}' is already routed to '{target}'.",
                 )
                 return
-        lb_id = PactlRunner.create_loopback(sink_name, target, logger=self.add_output)
+        lb_id = PactlRunner.create_loopback(
+            sink_name, target, latency_msec=self.get_loopback_latency_ms(),
+            logger=self.add_output,
+        )
         if lb_id:
             self.add_output(
                 f"Routed '{app_str}' (via {sink_name}) → '{target}' "
@@ -1966,8 +2047,11 @@ class MainWindow:
             f"output ('{default}') so you can hear it now?\n\n"
             f"(You can change routing at any time on the Manage tab.)",
         ):
-            PactlRunner.create_loopback(sink_name, default,
-                                        logger=self.add_output)
+            PactlRunner.create_loopback(
+                sink_name, default,
+                latency_msec=self.get_loopback_latency_ms(),
+                logger=self.add_output,
+            )
             self.refresh_all_views()
             self.add_output(
                 f"Routed '{sink_name}' → '{default}'"
@@ -2587,7 +2671,11 @@ class MainWindow:
         for t in target_outputs:
             if t in existing:
                 continue
-            mod = PactlRunner.create_loopback(monitor, t, logger=self.add_output)
+            mod = PactlRunner.create_loopback(
+                monitor, t,
+                latency_msec=self.get_loopback_latency_ms(),
+                logger=self.add_output,
+            )
             if mod:
                 added.append(t)
         if added:
@@ -3072,7 +3160,8 @@ class MainWindow:
                 PactlRunner.unload_loopback(lb["id"])
 
         lb_id = PactlRunner.create_loopback(
-            monitor, target, latency_msec=1, logger=self.add_output
+            monitor, target, latency_msec=self.get_loopback_latency_ms(),
+            logger=self.add_output,
         )
         if lb_id is None:
             self.add_output(f"Failed to create loopback from {monitor} to {target}")
@@ -3173,7 +3262,8 @@ class MainWindow:
             if target in existing_targets:
                 continue  # Already routed to this target
             lb_id = PactlRunner.create_loopback(
-                monitor, target, latency_msec=1, logger=self.add_output
+                monitor, target, latency_msec=self.get_loopback_latency_ms(),
+                logger=self.add_output,
             )
             if lb_id is not None:
                 created.append(target)
@@ -3841,6 +3931,82 @@ class MainWindow:
                     self.channel_map_custom_entry.grid_remove()
                     self.channel_map_var.set(layout)
                 break
+
+    def _latency_auto_label(self) -> str:
+        """Return the Auto preset's label, with the recommended value filled in.
+
+        E.g. "Auto - 50 ms (recommended for 48kHz)" or
+             "Auto - 100 ms (recommended for 96kHz)".
+        """
+        try:
+            rate = int(self.rate_var.get())
+        except (ValueError, tk.TclError):
+            rate = 48000
+        rec = self._latency_recommended_ms
+        return f"Auto - {rec} ms (recommended for {rate // 1000}kHz)"
+
+    def _latency_preset_labels(self) -> list:
+        """Return the list of labels for the latency combobox, with
+        the Auto option's label filled in dynamically."""
+        out = []
+        for label, value in self._latency_presets:
+            if value is None:
+                out.append(self._latency_auto_label())
+            else:
+                out.append(label)
+        return out
+
+    def _on_latency_preset_change(self, _event=None):
+        """When the user picks a latency preset, show/hide the custom entry
+        and update the underlying latency_var."""
+        label = self.latency_preset_var.get()
+        for preset_label, value in self._latency_presets:
+            if value is None:
+                # Auto — use the dynamic auto label as the match key
+                if label == self._latency_auto_label() or label.startswith("Auto"):
+                    self.latency_custom_entry.grid_remove()
+                    return
+                continue
+            if preset_label == label or (
+                value == "__custom__" and label == "Custom (type below)"
+            ):
+                if value == "__custom__":
+                    # Show the custom entry, seeded with the current
+                    # recommended value
+                    try:
+                        self.latency_var.set(str(self._latency_recommended_ms))
+                    except AttributeError:
+                        self.latency_var.set("50")
+                    self.latency_custom_entry.grid(
+                        row=8, column=1, sticky=tk.W, padx=5, pady=5
+                    )
+                else:
+                    self.latency_custom_entry.grid_remove()
+                    self.latency_var.set(str(value))
+                return
+
+    def get_loopback_latency_ms(self) -> int:
+        """Return the currently selected loopback latency in milliseconds.
+
+        Resolves the combobox selection to a concrete int, with
+        bounds-checking (clamped to 1-1000 ms) and a sane fallback.
+        """
+        label = self.latency_preset_var.get()
+        # 1. Match against a preset
+        for preset_label, value in self._latency_presets:
+            if value is None:
+                if label == self._latency_auto_label() or label.startswith("Auto"):
+                    return self._latency_recommended_ms
+            elif preset_label == label:
+                if value == "__custom__":
+                    break  # fall through to the custom entry
+                return value
+        # 2. Custom entry — read and validate
+        try:
+            v = int(self.latency_var.get())
+        except (ValueError, tk.TclError):
+            return 50
+        return max(1, min(1000, v))
 
     def toggle_advanced_options(self):
         """Toggle the visibility of advanced options.

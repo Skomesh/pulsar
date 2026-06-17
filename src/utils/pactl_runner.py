@@ -493,6 +493,56 @@ class PactlRunner:
         return successful, errors
 
     @staticmethod
+    def recommended_loopback_latency_ms(sample_rate: int) -> int:
+        """Return a recommended module-loopback latency (in milliseconds)
+        for a given sample rate.
+
+        Why this matters
+        ----------------
+        A module-loopback with too-low latency causes buffer underruns
+        which sound robotic/crackly. The per-frame deadline shrinks
+        as sample rate goes up (21μs at 48kHz, 10μs at 96kHz, 5μs at
+        192kHz) while per-frame DSP time is roughly constant
+        (~tens of μs). So higher sample rates need more latency
+        cushion to absorb CPU scheduling jitter.
+
+        The formula below is empirical — it's "good enough" for most
+        desktop setups including ones with moderate DSP chains
+        (EasyEffects, etc.). It's NOT a guarantee. If users get
+        robotic audio at the recommended value, they should raise
+        it; if they get the latency they want at a lower value,
+        they can lower it.
+
+        Formula
+        -------
+        base_ms = 50 (at 48kHz)
+        recommended = base_ms * (sample_rate / 48000)
+        clamped to [5, 500] ms.
+
+        Examples:
+          22050 -> 23 ms
+          44100 -> 46 ms
+          48000 -> 50 ms
+          88200 -> 92 ms
+          96000 -> 100 ms
+          192000 -> 200 ms
+          384000 -> 400 ms
+
+        Args:
+            sample_rate: The audio sample rate in Hz. Common values
+                         are 44100, 48000, 88200, 96000, 192000.
+
+        Returns:
+            Recommended loopback latency in milliseconds (always >= 5,
+            <= 500). Returns 50 (a sensible default) for unknown
+            sample rates.
+        """
+        if sample_rate <= 0:
+            return 50
+        rec = round(50 * (sample_rate / 48000))
+        return max(5, min(500, rec))
+
+    @staticmethod
     def create_loopback(
         source_monitor: str,
         sink: str,

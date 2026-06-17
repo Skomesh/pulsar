@@ -62,6 +62,19 @@ from utils.pactl_runner import PactlRunner
 
 CURRENT_SCHEMA_VERSION = 2
 
+# Sentinel used in a profile's routing[].to to mean "use the user's current
+# default sink at apply time". This lets us ship profiles that work on any
+# machine without hard-coding a hardware sink name (e.g. some user has a USB
+# headset, another has an ALSA HDA output — the names differ).
+#
+# Why a sentinel instead of the literal string "default":
+#   - "default" is shell-safe and could conceivably be a real sink name on
+#     some system, leading to silent mis-routing.
+#   - Angle brackets are NOT allowed by _VALID_SINK_NAME, so the sentinel can
+#     never collide with a real sink name.
+#   - It's obviously a placeholder to anyone reading the JSON.
+DEFAULT_SINK_SENTINEL = "<AUTO_DEFAULT>"
+
 # Sink names must be shell-safe. pactl tolerates more, but our apply path
 # uses shlex.split, so we restrict to a conservative subset.
 _VALID_SINK_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -367,6 +380,18 @@ class ProfileManager:
                     continue
                 if not r.get("from") or not r.get("to"):
                     errors.append(f"routing[{i}] needs both 'from' and 'to'")
+                # routing[].to may be the DEFAULT_SINK_SENTINEL — that's a
+                # placeholder resolved at apply time, not a real sink name.
+                # Anything else must look like a real sink name so we catch
+                # typos here instead of at apply time.
+                to_val = r.get("to")
+                if to_val and to_val != DEFAULT_SINK_SENTINEL:
+                    if not _VALID_SINK_NAME.match(str(to_val)):
+                        errors.append(
+                            f"routing[{i}].to is invalid: {to_val!r} "
+                            f"(use {DEFAULT_SINK_SENTINEL!r} to mean "
+                            "'current default sink')"
+                        )
 
         return errors, warnings
 
@@ -435,10 +460,41 @@ class ProfileManager:
             for w in warnings:
                 logger(f"Profile warning: {w}")
 
+        # Step 0: resolve the DEFAULT_SINK_SENTINEL (if any routing entry
+        # uses it) to the user's current default sink name. We do this ONCE
+        # up-front and substitute in-place on the routing list so the rest
+        # of the apply path is unchanged — the sentinel never appears in
+        # pactl commands or downstream error messages.
+        # Mutating profile["routing"] is intentional: this profile dict is
+        # constructed fresh on each apply (from get_profile() which returns
+        # a migrated copy) and is discarded after apply returns.
+        routing = profile.get("routing") or []
+        uses_sentinel = any(
+            r.get("to") == DEFAULT_SINK_SENTINEL for r in routing
+        )
+        if uses_sentinel:
+            default_sink = PactlRunner.get_default_sink(logger)
+            if not default_sink:
+                result["errors"].append(
+                    f"Profile uses {DEFAULT_SINK_SENTINEL!r} sentinel "
+                    "but no default sink could be determined. "
+                    "Make sure PulseAudio/PipeWire is running and "
+                    "a default sink is set."
+                )
+                return result
+            if logger:
+                logger(
+                    f"  Resolving {DEFAULT_SINK_SENTINEL!r} -> "
+                    f"{default_sink!r}"
+                )
+            for r in routing:
+                if r.get("to") == DEFAULT_SINK_SENTINEL:
+                    r["to"] = default_sink
+
         # Step 1: pre-validate routing targets. Hardware sinks must exist
         # BEFORE we touch anything (otherwise rollback would lose the user's
         # existing setup).
-        for i, r in enumerate(profile.get("routing", [])):
+        for i, r in enumerate(routing):
             target = r.get("to", "")
             if not PactlRunner.sink_exists(target, logger):
                 result["errors"].append(
@@ -503,7 +559,7 @@ class ProfileManager:
             result["created_devices"].append({"name": name, "module_id": mod_id})
 
         # Step 4: create loopbacks
-        for r in profile.get("routing", []):
+        for r in routing:
             src = r["from"]
             tgt = r["to"]
             latency = int(r.get("latency_msec", 1))

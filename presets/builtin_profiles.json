@@ -1,0 +1,101 @@
+{
+  "Gaming": {
+    "schema_version": 2,
+    "created": "2026-06-16T00:00:00+00:00",
+    "description": "Voice chat + game audio mixed to headphones, music stays isolated. Use this when you want to hear your friends and the game on your headset, but keep your music app on its own virtual output so OBS (or any other recorder) can capture the stream audio without your music bleeding into the recording. Routing uses <AUTO_DEFAULT> for the hardware output, which ProfileManager.apply_profile resolves to your current default sink at apply time, so this profile works on any machine.",
+    "devices": [
+      {
+        "name": "game_sink",
+        "type": "sink",
+        "channels": 2,
+        "description": "Game Audio"
+      },
+      {
+        "name": "teamspeak_sink",
+        "type": "sink",
+        "channels": 2,
+        "description": "Teamspeak / Discord / Voice Chat Audio"
+      },
+      {
+        "name": "music_sink",
+        "type": "source",
+        "channels": 2,
+        "description": "Music Audio (capture source for OBS)"
+      }
+    ],
+    "routing": [
+      {
+        "from": "game_sink",
+        "to": "<AUTO_DEFAULT>",
+        "latency_msec": 1
+      },
+      {
+        "from": "teamspeak_sink",
+        "to": "<AUTO_DEFAULT>",
+        "latency_msec": 1
+      }
+    ]
+  },
+  "Streaming": {
+    "schema_version": 2,
+    "created": "2026-06-16T00:00:00+00:00",
+    "description": "Same three devices as the Gaming profile, but music_sink is ALSO routed to the default output. Use this when you want to hear your music in your headphones while streaming, but still have music_sink available as a capture source so OBS can record or mute it independently of what you're hearing. Routing uses <AUTO_DEFAULT> for the hardware output, which ProfileManager.apply_profile resolves to your current default sink at apply time.",
+    "devices": [
+      {
+        "name": "game_sink",
+        "type": "sink",
+        "channels": 2,
+        "description": "Game Audio"
+      },
+      {
+        "name": "teamspeak_sink",
+        "type": "sink",
+        "channels": 2,
+        "description": "Teamspeak / Discord / Voice Chat Audio"
+      },
+      {
+        "name": "music_sink",
+        "type": "source",
+        "channels": 2,
+        "description": "Music Audio (capture source for OBS)"
+      }
+    ],
+    "routing": [
+      {
+        "from": "game_sink",
+        "to": "<AUTO_DEFAULT>",
+        "latency_msec": 1
+      },
+      {
+        "from": "teamspeak_sink",
+        "to": "<AUTO_DEFAULT>",
+        "latency_msec": 1
+      },
+      {
+        "from": "music_sink",
+        "to": "<AUTO_DEFAULT>",
+        "latency_msec": 1
+      }
+    ]
+  },
+  "Voice Chat Only": {
+    "schema_version": 2,
+    "created": "2026-06-16T00:00:00+00:00",
+    "description": "Minimal setup for when you just need to be on a call. One virtual sink (voice_sink) for Discord, Teamspeak, or any voice chat application; the virtual sink is looped to your default output so you can hear the other side. No music or game routing, no extra capture sources. Routing uses <AUTO_DEFAULT> for the hardware output, which ProfileManager.apply_profile resolves to your current default sink at apply time.",
+    "devices": [
+      {
+        "name": "voice_sink",
+        "type": "sink",
+        "channels": 2,
+        "description": "Voice Chat Audio (Discord / Teamspeak / etc.)"
+      }
+    ],
+    "routing": [
+      {
+        "from": "voice_sink",
+        "to": "<AUTO_DEFAULT>",
+        "latency_msec": 1
+      }
+    ]
+  }
+}

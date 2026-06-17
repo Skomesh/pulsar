@@ -16,6 +16,7 @@ import unittest
 from utils.pactl_runner import PactlRunner
 from utils.profile_manager import (
     CURRENT_SCHEMA_VERSION,
+    DEFAULT_SINK_SENTINEL,
     ProfileError,
     ProfileManager,
 )
@@ -111,6 +112,35 @@ class TestMigration(unittest.TestCase):
             self.assertEqual(loaded["Stereo"]["schema_version"], 2)
             self.assertEqual(loaded["MyCustom"]["schema_version"], 2)
             self.assertEqual(loaded["Stereo"]["devices"], [])
+
+
+class TestDefaultSinkSentinel(unittest.TestCase):
+    """Validation and substitution of the <AUTO_DEFAULT> sentinel.
+
+    These tests don't touch pactl — they exercise _validate_profile
+    (pure-Python) and use unittest.mock to simulate the apply-time
+    behavior of PactlRunner.get_default_sink / sink_exists / create_*.
+    """
+
+    def test_sentinel_passes_validation(self):
+        """A routing entry with the sentinel must validate cleanly."""
+        profile = {
+            "schema_version": 2,
+            "devices": [{"name": "d", "type": "sink", "channels": 2}],
+            "routing": [{"from": "d", "to": DEFAULT_SINK_SENTINEL}],
+        }
+        errors, warnings = ProfileManager._validate_profile(profile)
+        self.assertEqual(errors, [])
+
+    def test_non_sentinel_garbage_rejected_by_validation(self):
+        """A non-shell-safe routing target should still be rejected."""
+        profile = {
+            "schema_version": 2,
+            "devices": [{"name": "d", "type": "sink", "channels": 2}],
+            "routing": [{"from": "d", "to": "has spaces in name"}],
+        }
+        errors, _ = ProfileManager._validate_profile(profile)
+        self.assertTrue(any("routing" in e for e in errors))
 
 
 class TestSaveAndLoad(_ProfileTestBase):
@@ -313,6 +343,53 @@ class TestApplyProfile(_ProfileTestBase):
         result = self.pm.apply_profile(bad)
         self.assertFalse(result["success"])
         self.assertTrue(any("name" in e for e in result["errors"]))
+
+    def test_apply_resolves_auto_default_sentinel(self):
+        """routing[].to == <AUTO_DEFAULT> must resolve to the current default sink."""
+        default = PactlRunner.get_default_sink()
+        if not default:
+            self.skipTest("no default sink available")
+        profile = {
+            "schema_version": 2,
+            "description": "sentinel test",
+            "devices": [{"name": "auto_a", "type": "sink", "channels": 2}],
+            "routing": [
+                {"from": "auto_a", "to": DEFAULT_SINK_SENTINEL, "latency_msec": 1}
+            ],
+        }
+        result = self.pm.apply_profile(profile, unload_existing=True)
+        self.assertTrue(result["success"], msg=f"apply failed: {result['errors']}")
+        # The created loopback must target the actual default sink, not the
+        # sentinel literal.
+        loopbacks = PactlRunner.list_loopbacks()
+        sinks_for = {lb["sink"] for lb in loopbacks
+                     if lb["source"] == "auto_a.monitor"}
+        self.assertEqual(sinks_for, {default})
+        # No loopback should have the sentinel as its sink target.
+        self.assertFalse(
+            any(lb["sink"] == DEFAULT_SINK_SENTINEL for lb in loopbacks)
+        )
+
+    def test_apply_sentinel_fails_when_no_default_sink(self):
+        """If the sentinel can't be resolved, apply must fail cleanly."""
+        from unittest.mock import patch as _patch
+        profile = {
+            "schema_version": 2,
+            "description": "no default",
+            "devices": [{"name": "nod_a", "type": "sink", "channels": 2}],
+            "routing": [
+                {"from": "nod_a", "to": DEFAULT_SINK_SENTINEL, "latency_msec": 1}
+            ],
+        }
+        with _patch.object(PactlRunner, "get_default_sink", return_value=None):
+            result = self.pm.apply_profile(profile, unload_existing=True)
+        self.assertFalse(result["success"])
+        self.assertTrue(
+            any("AUTO_DEFAULT" in e for e in result["errors"])
+        )
+        # No devices should have been created (sentinel resolution failed
+        # before the device-creation step).
+        self.assertNotIn("nod_a", _sink_names())
 
 
 class TestRoundtrip(_ProfileTestBase):

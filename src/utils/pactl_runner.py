@@ -745,3 +745,33 @@ class PactlRunner:
             return False
         sinks = PactlRunner.list_sinks(logger)
         return any(s.get('name') == sink_name for s in sinks)
+
+    @staticmethod
+    def get_default_sink(logger=None) -> Optional[str]:
+        """Return the name of the system's current default sink.
+
+        Reads ``pactl info`` and parses the ``Default Sink: <name>`` line.
+        Used by ProfileManager.apply_profile to resolve the
+        ``<AUTO_DEFAULT>`` sentinel in starter profiles — hardware output
+        names are environment-specific (USB headsets, ALSA HDA, etc.), so
+        shippable profiles can't hard-code them.
+
+        Args:
+            logger: Optional logger callback for command tracing.
+
+        Returns:
+            The default sink name as a string, or None if it can't be
+            determined (e.g. pactl not running, no default set, or
+            ``pactl info`` returned no matching line).
+        """
+        output, return_code = PactlRunner.run_command(['info'], logger)
+        if return_code != 0:
+            return None
+        for line in output.splitlines():
+            # Both PulseAudio and PipeWire's compat shim emit the same format.
+            line_stripped = line.strip()
+            if line_stripped.startswith("Default Sink:"):
+                _, _, value = line_stripped.partition(":")
+                value = value.strip()
+                return value or None
+        return None

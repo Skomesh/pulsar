@@ -1,9 +1,9 @@
 [Desktop Entry]
 Type=Application
 Version=1.0
-Name=PulseAudio GUI
+Name=Pulsar
 GenericName=Audio Control
-Comment=Manage PulseAudio modules and configurations
+Comment=Graphical audio routing manager
 Exec=PLACEHOLDER_EXEC_PATH
 Icon=audio-card
 Terminal=false
@@ -14,4 +14,4 @@ X-KDE-SubstituteUID=false
 X-KDE-StartupNotify=true
 
 # This is a template file used during installation
-# The actual desktop file will be generated with correct paths by install.sh 
+# The actual desktop file will be generated with correct paths by install.sh

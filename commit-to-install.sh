@@ -11,7 +11,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Define directories
-APP_NAME="pactl-gui"
+APP_NAME="pulsar"
 INSTALL_DIR="$HOME/.local/share/$APP_NAME"
 CURRENT_DIR="$(pwd)"
 

@@ -18,13 +18,13 @@ command_exists() {
 }
 
 # Define directories (user-specific)
-APP_NAME="pactl-gui"
+APP_NAME="pulsar"
 APP_DIR="$HOME/.local/share/$APP_NAME"
 DESKTOP_DIR="$HOME/.local/share/applications"
 BIN_DIR="$HOME/.local/bin"
 
 # Check if installation exists
-if [ ! -d "$APP_DIR" ] && [ ! -f "$BIN_DIR/pactl-gui" ] && [ ! -f "$DESKTOP_DIR/pactl-gui.desktop" ]; then
+if [ ! -d "$APP_DIR" ] && [ ! -f "$BIN_DIR/pulsar" ] && [ ! -f "$DESKTOP_DIR/pulsar.desktop" ]; then
     echo -e "${YELLOW}PulseAudio Control GUI doesn't appear to be installed${NC}"
     echo "Nothing to uninstall."
     exit 0
@@ -40,18 +40,18 @@ else
 fi
 
 # Remove symlink from bin directory
-if [ -L "$BIN_DIR/pactl-gui" ] || [ -f "$BIN_DIR/pactl-gui" ]; then
+if [ -L "$BIN_DIR/pulsar" ] || [ -f "$BIN_DIR/pulsar" ]; then
     echo -e "${YELLOW}Removing symlink from $BIN_DIR...${NC}"
-    rm -f "$BIN_DIR/pactl-gui"
+    rm -f "$BIN_DIR/pulsar"
     echo -e "${GREEN}✓ Command-line launcher removed${NC}"
 else
     echo -e "${YELLOW}Command-line launcher not found, skipping...${NC}"
 fi
 
 # Remove desktop file
-if [ -f "$DESKTOP_DIR/pactl-gui.desktop" ]; then
+if [ -f "$DESKTOP_DIR/pulsar.desktop" ]; then
     echo -e "${YELLOW}Removing desktop file...${NC}"
-    rm -f "$DESKTOP_DIR/pactl-gui.desktop"
+    rm -f "$DESKTOP_DIR/pulsar.desktop"
     echo -e "${GREEN}✓ Desktop integration removed${NC}"
 else
     echo -e "${YELLOW}Desktop file not found, skipping...${NC}"

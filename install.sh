@@ -10,7 +10,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-echo -e "${BLUE}Installing PulseAudio Control GUI...${NC}"
+echo -e "${BLUE}Installing Pulsar...${NC}"
 
 # Function to check if command exists
 command_exists() {
@@ -59,7 +59,7 @@ echo -e "${GREEN}All dependencies satisfied!${NC}"
 echo ""
 
 # Define directories (user-specific)
-APP_NAME="pactl-gui"
+APP_NAME="pulsar"
 APP_DIR="$HOME/.local/share/$APP_NAME"
 DESKTOP_DIR="$HOME/.local/share/applications"
 BIN_DIR="$HOME/.local/bin"
@@ -83,22 +83,22 @@ cp -r ./* "$APP_DIR/"
 rm -f "$APP_DIR/install.sh" "$APP_DIR/uninstall.sh" "$APP_DIR/commit-to-install.sh"
 
 # Make the launcher script executable
-chmod +x "$APP_DIR/pactl-gui.sh"
+chmod +x "$APP_DIR/pulsar"
 
 # Create symlink in bin directory
 echo -e "${YELLOW}Creating symbolic link in $BIN_DIR...${NC}"
-ln -sf "$APP_DIR/pactl-gui.sh" "$BIN_DIR/pactl-gui"
+ln -sf "$APP_DIR/pulsar" "$BIN_DIR/pulsar"
 
 # Install desktop file with correct paths
 echo -e "${YELLOW}Installing desktop file to $DESKTOP_DIR...${NC}"
-cat > "$DESKTOP_DIR/pactl-gui.desktop" << EOL
+cat > "$DESKTOP_DIR/pulsar.desktop" << EOL
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=PulseAudio GUI
+Name=Pulsar
 GenericName=Audio Control
-Comment=Manage PulseAudio modules and configurations
-Exec=$BIN_DIR/pactl-gui
+Comment=Graphical audio routing manager
+Exec=$BIN_DIR/pulsar
 Icon=audio-card
 Terminal=false
 Categories=AudioVideo;Audio;Settings;
@@ -108,7 +108,7 @@ X-KDE-SubstituteUID=false
 X-KDE-StartupNotify=true
 EOL
 
-chmod +x "$DESKTOP_DIR/pactl-gui.desktop"
+chmod +x "$DESKTOP_DIR/pulsar.desktop"
 
 # Update desktop database
 echo -e "${YELLOW}Updating desktop database...${NC}"
@@ -129,7 +129,7 @@ fi
 if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
     echo ""
     echo -e "${YELLOW}Note: $HOME/.local/bin is not in your PATH${NC}"
-    echo "To run 'pactl-gui' from anywhere, add this line to your ~/.bashrc or ~/.zshrc:"
+    echo "To run 'pulsar' from anywhere, add this line to your ~/.bashrc or ~/.zshrc:"
     echo "export PATH=\"\$HOME/.local/bin:\$PATH\""
     echo ""
 fi
@@ -137,10 +137,10 @@ fi
 echo ""
 echo -e "${GREEN}Installation complete!${NC}"
 echo ""
-echo -e "${BLUE}You can now launch PulseAudio Control GUI:${NC}"
-echo "• From your application menu (Audio → PulseAudio GUI)"
-echo "• By typing 'pactl-gui' in a terminal"
-echo "• By running '$BIN_DIR/pactl-gui'"
+echo -e "${BLUE}You can now launch Pulsar:${NC}"
+echo "• From your application menu (Audio → Pulsar)"
+echo "• By typing 'pulsar' in a terminal"
+echo "• By running '$BIN_DIR/pulsar'"
 echo ""
 echo -e "${YELLOW}Note: If the application doesn't appear in your menu immediately:${NC}"
 echo "1. Log out and log back in to your desktop session"

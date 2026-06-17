@@ -227,6 +227,47 @@ class TestLoopback(unittest.TestCase):
         for name in outputs:
             self.assertFalse(PactlRunner.is_null_sink(name))
 
+    def test_multi_output_loopback_two_targets_from_same_source(self):
+        """A single virtual sink can be routed to multiple hardware outputs
+        via multiple loopbacks from the same monitor source. This is the
+        Phase 5b 'multi-output routing' capability — used for the
+        'music plays on speakers AND headphones simultaneously' use case.
+        """
+        # Need at least 2 hardware outputs for this test to be meaningful
+        outputs = PactlRunner.list_hardware_outputs()
+        if len(outputs) < 2:
+            self.skipTest("need at least 2 hardware outputs for this test")
+
+        PactlRunner.create_sink_only("multi_out", "Multi Out", channels=2)
+        monitor = PactlRunner.monitor_source_for("multi_out")
+
+        # Route to first 2 outputs
+        lb1_id = PactlRunner.create_loopback(monitor, outputs[0])
+        lb2_id = PactlRunner.create_loopback(monitor, outputs[1])
+        self.assertIsNotNone(lb1_id)
+        self.assertIsNotNone(lb2_id)
+        self.assertNotEqual(lb1_id, lb2_id)
+
+        # Verify both are present
+        loopbacks = PactlRunner.list_loopbacks()
+        from_monitor = [
+            lb for lb in loopbacks if lb.get("source") == monitor
+        ]
+        self.assertEqual(len(from_monitor), 2)
+        targets = {lb.get("sink") for lb in from_monitor}
+        self.assertEqual(targets, {outputs[0], outputs[1]})
+
+        # Remove one loopback, the other should remain
+        self.assertTrue(PactlRunner.unload_loopback(lb1_id))
+        from_monitor = [
+            lb for lb in PactlRunner.list_loopbacks() if lb.get("source") == monitor
+        ]
+        self.assertEqual(len(from_monitor), 1)
+        self.assertEqual(from_monitor[0].get("sink"), outputs[1])
+
+        # Cleanup the remaining loopback
+        PactlRunner.unload_loopback(lb2_id)
+
 
 if __name__ == "__main__":
     unittest.main()

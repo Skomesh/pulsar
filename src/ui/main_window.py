@@ -11,7 +11,7 @@ import sys
 import tempfile
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-from typing import Optional
+from typing import Any, List, Optional
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.pactl_runner import PactlRunner
@@ -552,8 +552,9 @@ class MainWindow:
 
         # Routing frame — lets the user wire a selected virtual sink to a real output
         self.routing_frame = ttk.LabelFrame(frame, text="Routing")
-        self.routing_frame.pack(fill=tk.X, padx=10, pady=5)
+        self.routing_frame.columnconfigure(1, weight=1)
 
+        # --- Single-output routing (legacy dropdown) -------------------
         # Status line
         self.routing_status_var = tk.StringVar(value="Select a virtual sink to route")
         ttk.Label(
@@ -595,7 +596,72 @@ class MainWindow:
 
         self.routing_frame.columnconfigure(1, weight=1)
 
-        # Device controls — per-device volume slider, mute, set-as-default.
+        # --- Multi-output routing (Phase 5b) ----------------------------
+        # Checkbox list of all hardware outputs. Each checked item gets a
+        # loopback. Useful for the "music plays on speakers AND
+        # headphones simultaneously" use case (combine-stream preset
+        # from the plan, implemented via multiple loopbacks since
+        # module-combine-stream does the opposite: mix multiple sources
+        # INTO one sink).
+        self.multi_routing_frame = ttk.LabelFrame(
+            self.routing_frame, text="Multi-output Routing"
+        )
+        self.multi_routing_frame.grid(
+            row=2, column=0, columnspan=4, sticky=(tk.W, tk.E), padx=5, pady=(10, 5)
+        )
+
+        ttk.Label(
+            self.multi_routing_frame,
+            text=(
+                "Check one or more hardware outputs to send this sink's audio "
+                "to all of them simultaneously. Pre-checked items already "
+                "have an active loopback."
+            ),
+            wraplength=600,
+            font=("", 9),
+        ).pack(anchor=tk.W, padx=5, pady=(5, 2))
+
+        # Listbox with multi-select via EXTENDED (Shift/Ctrl+click)
+        listbox_frame = ttk.Frame(self.multi_routing_frame)
+        listbox_frame.pack(fill=tk.X, padx=5, pady=2)
+        self.multi_routing_listbox = tk.Listbox(
+            listbox_frame,
+            selectmode=tk.EXTENDED,
+            height=4,
+            exportselection=False,
+        )
+        self.multi_routing_listbox.pack(
+            side=tk.LEFT, fill=tk.BOTH, expand=True
+        )
+        listbox_scroll = ttk.Scrollbar(
+            listbox_frame, orient=tk.VERTICAL,
+            command=self.multi_routing_listbox.yview,
+        )
+        listbox_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.multi_routing_listbox.configure(yscrollcommand=listbox_scroll.set)
+
+        # Track which targets are "currently routed" (for pre-checking).
+        # Keyed by sink name (rebuilt when the user selects a sink).
+        self._multi_routed_targets: List[str] = []
+
+        multi_buttons = ttk.Frame(self.multi_routing_frame)
+        multi_buttons.pack(fill=tk.X, padx=5, pady=2)
+        self.multi_apply_button = ttk.Button(
+            multi_buttons,
+            text="Apply to Selected",
+            command=self.apply_multi_routing,
+            state="disabled",
+        )
+        self.multi_apply_button.pack(side=tk.LEFT, padx=(0, 5))
+        self.multi_stop_all_button = ttk.Button(
+            multi_buttons,
+            text="Stop All Routing",
+            command=self.stop_all_routing_for_selected,
+            state="disabled",
+        )
+        self.multi_stop_all_button.pack(side=tk.LEFT, padx=5)
+
+        # --- Device controls — per-device volume slider, mute, set-as-default.
         # Lets the user adjust the selected virtual sink's volume without
         # opening pavucontrol. This is the Phase 4 polish item that makes
         # Pulsar feel like a tool: one place to control your routing
@@ -2119,6 +2185,33 @@ class MainWindow:
             self.route_button.config(state="normal")
             self.stop_route_button.config(state="disabled")
 
+        # Populate the multi-output listbox and pre-check items that
+        # already have an active loopback from this sink's monitor.
+        # (There can be multiple loopbacks with the same source — the
+        # user can already have created them by other means.)
+        self.multi_routing_listbox.delete(0, tk.END)
+        for out in outputs:
+            self.multi_routing_listbox.insert(tk.END, out)
+        # Find all loopbacks from this sink's monitor
+        active_targets: set[str] = set()
+        for lb in loopbacks:
+            if lb.get("source") != monitor:
+                continue
+            sink = lb.get("sink")
+            if sink:
+                active_targets.add(sink)
+        self._multi_routed_targets = sorted(active_targets)
+        # Pre-check active targets in the listbox
+        for idx, out in enumerate(outputs):
+            if out in active_targets:
+                self.multi_routing_listbox.selection_set(idx)
+        # Enable/disable multi-routing buttons
+        if outputs:
+            self.multi_apply_button.config(state="normal")
+            self.multi_stop_all_button.config(
+                state="normal" if active_targets else "disabled"
+            )
+
     # ------------------------------------------------------------------
     # Device controls (Phase 4: volume + mute + set-as-default)
     # ------------------------------------------------------------------
@@ -2367,6 +2460,131 @@ class MainWindow:
                 self.add_output(f"Failed to unload loopback #{lb['id']}")
 
         self.status_var.set(f"Stopped routing '{sink_name}'")
+        self.refresh_all_views()
+        self._reselect_after_refresh(sink_name)
+
+    def apply_multi_routing(self):
+        """Route the selected virtual sink to every checked hardware output.
+
+        Creates one loopback per checked target. Loopbacks to targets
+        that the user has just unchecked are removed. The end state
+        matches exactly what the user has selected in the listbox —
+        idempotent.
+        """
+        sink_name = getattr(self, "_routing_sink_name", None)
+        if not sink_name:
+            return
+
+        # Collect the selected targets from the listbox
+        selected_indices = self.multi_routing_listbox.curselection()
+        if not selected_indices:
+            messagebox.showinfo(
+                "Multi-output Routing",
+                "Check one or more hardware outputs first.",
+            )
+            return
+        selected_targets = {
+            self.multi_routing_listbox.get(i) for i in selected_indices
+        }
+
+        monitor = PactlRunner.monitor_source_for(sink_name)
+        if monitor is None:
+            messagebox.showerror(
+                "Routing error",
+                f"Cannot derive monitor source for '{sink_name}'",
+            )
+            return
+
+        # Find existing loopbacks from this monitor
+        existing_loopbacks = [
+            lb for lb in PactlRunner.list_loopbacks()
+            if lb.get("source") == monitor
+        ]
+        existing_targets: dict[str, Any] = {}
+        for lb in existing_loopbacks:
+            sink = lb.get("sink")
+            if sink:
+                existing_targets[sink] = lb
+
+        created: List[str] = []
+        removed: List[str] = []
+        failed: List[str] = []
+
+        # Remove loopbacks whose target is no longer selected
+        for target, lb in existing_targets.items():
+            if target not in selected_targets:
+                if PactlRunner.unload_loopback(lb["id"]):
+                    removed.append(target)
+                else:
+                    failed.append(f"unload {target}")
+
+        # Create loopbacks for newly selected targets
+        for target in selected_targets:
+            if target in existing_targets:
+                continue  # Already routed to this target
+            lb_id = PactlRunner.create_loopback(
+                monitor, target, latency_msec=1, logger=self.add_output
+            )
+            if lb_id is not None:
+                created.append(target)
+            else:
+                failed.append(f"create {target}")
+
+        # Report
+        if created:
+            self.add_output(
+                f"Multi-routing '{sink_name}' → {', '.join(sorted(created))}"
+            )
+        if removed:
+            self.add_output(
+                f"Stopped routing '{sink_name}' → {', '.join(sorted(removed))}"
+            )
+        if failed:
+            self.add_output(
+                f"Multi-routing failures: {', '.join(failed)}"
+            )
+
+        if created or removed:
+            self.status_var.set(
+                f"'{sink_name}' now routed to "
+                f"{len(selected_targets)} output(s)"
+            )
+        else:
+            self.status_var.set(
+                f"'{sink_name}' routing unchanged"
+            )
+
+        self.refresh_all_views()
+        self._reselect_after_refresh(sink_name)
+
+    def stop_all_routing_for_selected(self):
+        """Unload every loopback whose source is the selected sink's monitor."""
+        sink_name = getattr(self, "_routing_sink_name", None)
+        if not sink_name:
+            return
+        monitor = PactlRunner.monitor_source_for(sink_name)
+        if monitor is None:
+            return
+        ours = [
+            lb for lb in PactlRunner.list_loopbacks()
+            if lb.get("source") == monitor
+        ]
+        if not ours:
+            messagebox.showinfo(
+                "Routing", f"'{sink_name}' is not currently routed"
+            )
+            return
+        unloaded = 0
+        for lb in ours:
+            if PactlRunner.unload_loopback(lb["id"]):
+                unloaded += 1
+                self.add_output(
+                    f"Stopped routing '{sink_name}' → '{lb.get('sink')}' "
+                    f"(unloaded #{lb['id']})"
+                )
+        self.status_var.set(
+            f"Stopped all {unloaded} routing(s) for '{sink_name}'"
+        )
         self.refresh_all_views()
         self._reselect_after_refresh(sink_name)
 

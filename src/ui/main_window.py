@@ -29,6 +29,12 @@ from utils.pw_app_capture import (
     stop_pw_record,
     supports_app_capture,
 )
+from utils.pw_diagnostics import (
+    get_graph_snapshot,
+    health_summary,
+    pw_dump_available,
+    sample_rate_audit,
+)
 
 
 class MainWindow:
@@ -71,6 +77,7 @@ class MainWindow:
         self.profiles_tab = ttk.Frame(self.tab_control)
         self.capture_tab = ttk.Frame(self.tab_control)
         self.hardware_tab = ttk.Frame(self.tab_control)
+        self.diagnostics_tab = ttk.Frame(self.tab_control)
         self.output_tab = ttk.Frame(self.tab_control)
 
         # Add tabs to notebook
@@ -79,6 +86,7 @@ class MainWindow:
         self.tab_control.add(self.profiles_tab, text="Profiles")
         self.tab_control.add(self.capture_tab, text="Capture")
         self.tab_control.add(self.hardware_tab, text="Hardware")
+        self.tab_control.add(self.diagnostics_tab, text="Diagnostics")
         self.tab_control.add(self.output_tab, text="Output")
 
         # Bind tab change event to reset form state
@@ -92,6 +100,7 @@ class MainWindow:
         self.setup_profiles_tab()
         self.setup_capture_tab()
         self.setup_hardware_tab()
+        self.setup_diagnostics_tab()
         self.setup_output_tab()
 
         # Status bar at the bottom
@@ -1654,10 +1663,219 @@ class MainWindow:
                 "Check the Output tab for stderr.",
             )
 
+    def setup_diagnostics_tab(self):
+        """Set up the Diagnostics tab (Phase 7).
+
+        Three sub-sections:
+        1. Health Summary — top-level status, warnings, errors
+        2. Sample Rate Audit — are all audio nodes using the same rate?
+        3. Graph Snapshot — pw-top-style live table of nodes/links/clients
+
+        Refresh button takes a fresh snapshot. No auto-refresh (would
+        be a separate feature; current code is on-demand to keep things
+        simple and not interfere with the user's interaction).
+        """
+        outer = self._setup_scrollable_tab(self.diagnostics_tab, padding="10")
+
+        # Top: refresh + status
+        top = ttk.Frame(outer)
+        top.pack(fill=tk.X, pady=(0, 10))
+        ttk.Button(
+            top, text="Refresh Snapshot",
+            command=self._refresh_diagnostics, width=18,
+        ).pack(side=tk.LEFT)
+        if not pw_dump_available():
+            ttk.Label(
+                top,
+                text="pw-dump not found — install pipewire-tools to enable diagnostics",
+                foreground="red",
+            ).pack(side=tk.LEFT, padx=(10, 0))
+
+        # 1. Health Summary
+        health_frame = ttk.LabelFrame(
+            outer, text="Health Summary", padding="10"
+        )
+        health_frame.pack(fill=tk.X, pady=(0, 10))
+        self.diag_health_var = tk.StringVar(value="(refresh to load)")
+        self.diag_health_label = ttk.Label(
+            health_frame, textvariable=self.diag_health_var,
+            font=("", 11, "bold"),
+        )
+        self.diag_health_label.pack(anchor=tk.W)
+        self.diag_warnings_var = tk.StringVar(value="")
+        ttk.Label(
+            health_frame, textvariable=self.diag_warnings_var,
+            foreground="#996600", wraplength=800,
+        ).pack(anchor=tk.W, pady=(5, 0))
+        self.diag_errors_var = tk.StringVar(value="")
+        ttk.Label(
+            health_frame, textvariable=self.diag_errors_var,
+            foreground="#cc0000", wraplength=800,
+        ).pack(anchor=tk.W)
+
+        # 2. Sample Rate Audit
+        rate_frame = ttk.LabelFrame(
+            outer, text="Sample Rate Audit", padding="10"
+        )
+        rate_frame.pack(fill=tk.X, pady=(0, 10))
+        self.diag_rate_var = tk.StringVar(value="(refresh to load)")
+        ttk.Label(
+            rate_frame, textvariable=self.diag_rate_var,
+            font=("", 10),
+        ).pack(anchor=tk.W)
+
+        # 3. Graph Snapshot — pw-top-style table
+        snapshot_frame = ttk.LabelFrame(
+            outer, text="Graph Snapshot", padding="10"
+        )
+        snapshot_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Counts row
+        self.diag_counts_var = tk.StringVar(value="")
+        ttk.Label(
+            snapshot_frame, textvariable=self.diag_counts_var,
+            font=("", 10),
+        ).pack(anchor=tk.W, pady=(0, 5))
+
+        # The node table (pw-top-style)
+        ttk.Label(
+            snapshot_frame, text="Audio Nodes:",
+            font=("", 10, "bold"),
+        ).pack(anchor=tk.W, pady=(5, 2))
+
+        cols = ("id", "name", "class", "rate", "state", "app")
+        self.diag_nodes_tree = ttk.Treeview(
+            snapshot_frame, columns=cols, show="headings", height=8
+        )
+        for col, heading, width in [
+            ("id", "PW ID", 70),
+            ("name", "Node Name", 280),
+            ("class", "Media Class", 180),
+            ("rate", "Rate", 70),
+            ("state", "State", 90),
+            ("app", "App", 180),
+        ]:
+            self.diag_nodes_tree.heading(col, text=heading)
+            self.diag_nodes_tree.column(col, width=width, anchor=tk.W)
+        tree_scroll = ttk.Scrollbar(
+            snapshot_frame, orient=tk.VERTICAL,
+            command=self.diag_nodes_tree.yview,
+        )
+        self.diag_nodes_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.diag_nodes_tree.configure(yscrollcommand=tree_scroll.set)
+
+        # Auto-refresh on tab open (only once per visit)
+        self._diag_refreshed = False
+        self.tab_control.bind(
+            "<<NotebookTabChanged>>", self._on_diag_tab_changed, add="+"
+        )
+
+    def _on_diag_tab_changed(self, event=None):
+        """When user clicks the Diagnostics tab, take an initial snapshot
+        if we haven't already. After that, refresh is manual."""
+        current = self.tab_control.select()
+        for tab_id in self.tab_control.tabs():
+            if tab_id == current and tab_id == str(self.diagnostics_tab):
+                if not self._diag_refreshed:
+                    self._refresh_diagnostics()
+                    self._diag_refreshed = True
+                break
+
+    def _refresh_diagnostics(self):
+        """Take a fresh snapshot of the PipeWire graph and update all
+        the diagnostic panels."""
+        if not pw_dump_available():
+            self.diag_health_var.set("pw-dump not installed")
+            return
+        try:
+            snap = get_graph_snapshot()
+        except Exception as e:
+            self.diag_health_var.set(f"Snapshot failed: {e}")
+            self.add_output(f"Diagnostics: snapshot failed: {e}")
+            return
+        # Health summary
+        health = health_summary(snap)
+        status = health["status"]
+        if status == "healthy":
+            self.diag_health_var.set(
+                f"✓ HEALTHY — {health['counts']['nodes']} nodes, "
+                f"{health['counts']['links']} links, "
+                f"{health['counts']['clients']} clients"
+            )
+            self.diag_health_label.config(foreground="#006600")
+        elif status == "warnings":
+            warn_count = len(health["warnings"])
+            self.diag_health_var.set(
+                f"⚠ {warn_count} WARNING{'S' if warn_count != 1 else ''} — "
+                f"see details below"
+            )
+            self.diag_health_label.config(foreground="#996600")
+        else:
+            err_count = len(health["errors"])
+            self.diag_health_var.set(
+                f"✗ {err_count} ERROR{'S' if err_count != 1 else ''} — "
+                f"see details below"
+            )
+            self.diag_health_label.config(foreground="#cc0000")
+        # Warnings / errors
+        self.diag_warnings_var.set(
+            "\n".join("⚠ " + w for w in health["warnings"]) if health["warnings"] else ""
+        )
+        self.diag_errors_var.set(
+            "\n".join("✗ " + e for e in health["errors"]) if health["errors"] else ""
+        )
+        # Sample rate audit
+        audit = sample_rate_audit(snap)
+        if audit["audio_node_count"] == 0:
+            self.diag_rate_var.set("No audio nodes detected.")
+        elif audit["is_consistent"]:
+            self.diag_rate_var.set(
+                f"✓ All {audit['audio_node_count']} audio nodes run at "
+                f"{audit['recommended_rate']} Hz. "
+                f"Rates seen: {audit['rates_seen']}"
+            )
+        else:
+            self.diag_rate_var.set(
+                f"⚠ Rate mismatch — {audit['audio_node_count']} audio nodes, "
+                f"recommended: {audit['recommended_rate']} Hz. "
+                f"Rates seen: {audit['rates_seen']}. "
+                f"Mismatched: {len(audit['mismatched_nodes'])}"
+            )
+        # Counts summary
+        c = health["counts"]
+        self.diag_counts_var.set(
+            f"Clients: {c['clients']}    Modules: {c['modules']}    "
+            f"Devices: {c['devices']}    Ports: {c['ports']}    "
+            f"Links: {c['links']}    Nodes: {c['nodes']}"
+        )
+        # Populate node tree (audio nodes only)
+        for item in self.diag_nodes_tree.get_children():
+            self.diag_nodes_tree.delete(item)
+        for node in snap["nodes"]:
+            if not node.get("media_class", "").startswith("Audio/"):
+                continue
+            self.diag_nodes_tree.insert(
+                "", tk.END,
+                values=(
+                    node["id"],
+                    node["name"],
+                    node["media_class"],
+                    f"{node.get('rate', '?')} Hz" if node.get("rate") else "?",
+                    node["state"],
+                    node.get("app_name", ""),
+                ),
+            )
+        self.add_output(
+            f"Diagnostics: snapshot complete "
+            f"({health['counts']['nodes']} nodes, {health['counts']['links']} links)"
+        )
+
     def setup_output_tab(self):
         """Set up the Output tab content."""
         frame = ttk.Frame(self.output_tab, padding="10")
         frame.pack(fill=tk.BOTH, expand=True)
+
 
         # Output text
         self.output_text = tk.Text(frame, wrap=tk.WORD, height=20)

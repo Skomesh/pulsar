@@ -32,7 +32,7 @@ import os
 import shutil
 import subprocess
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # Portal ScreenCast source type bit flags (see xdg-desktop-portal docs).
 SOURCE_TYPE_MONITOR = 1
@@ -349,3 +349,120 @@ class PortalCapture:
                 f"Start: could not parse handle from output: {out!r}"
             )
         return handle
+
+
+# ----------------------------------------------------------------------
+# File capture — uses pw-record to record a specific PipeWire stream to
+# a WAV file. This is the "Capture this app to a file" action. It works
+# without any portal interaction and is the recommended path on systems
+# whose portal backend doesn't support APPLICATION source type (e.g. the
+# GTK fallback portal on non-GNOME desktops).
+# ----------------------------------------------------------------------
+
+
+def _which_pw_record() -> Optional[str]:
+    """Return the path to pw-record, or None if not installed."""
+    return shutil.which("pw-record")
+
+
+def pw_record_available() -> bool:
+    """True iff `pw-record` is installed (the pipewire-tools package)."""
+    return _which_pw_record() is not None
+
+
+class PwRecordError(Exception):
+    """Raised when pw-record fails to launch or terminates with an error."""
+
+
+def start_pw_record(
+    target_node_id: int,
+    output_path: str,
+    *,
+    sample_rate: int = 48000,
+    channels: int = 2,
+    extra_args: Optional[List[str]] = None,
+    logger=None,
+) -> "subprocess.Popen":
+    """Launch pw-record targeting a specific node ID, writing to output_path.
+
+    The function returns a Popen handle — the recording runs in the
+    background. The caller is responsible for stopping it (call
+    `stop_pw_record`) and for surfacing the output to the user.
+
+    Args:
+        target_node_id: PipeWire node ID to capture (from discover_app_audio_nodes).
+        output_path: Absolute path for the output WAV file. Must be writable.
+        sample_rate: Sample rate in Hz. Default 48000 (matches most audio devices).
+        channels: Channel count. Default 2 (stereo). Set 1 for mono capture.
+        extra_args: Additional pw-record flags. Use with care.
+        logger: Optional callback for status messages.
+
+    Returns:
+        subprocess.Popen instance for the running pw-record process.
+    """
+    pw_record = _which_pw_record()
+    if not pw_record:
+        raise PwRecordError(
+            "pw-record not found on PATH. Install pipewire-tools."
+        )
+    cmd = [
+        pw_record,
+        "--target", str(target_node_id),
+        "--rate", str(sample_rate),
+        "--channels", str(channels),
+        output_path,
+    ]
+    if extra_args:
+        cmd.extend(extra_args)
+    if logger:
+        logger(f"Launching: {' '.join(cmd)}")
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            # Don't inherit — pw-record is a long-running CLI tool, not a
+            # child we want to wait on. The caller manages its lifecycle.
+            close_fds=True,
+        )
+    except OSError as e:
+        raise PwRecordError(f"Failed to launch pw-record: {e}") from e
+    return proc
+
+
+def stop_pw_record(
+    proc: "subprocess.Popen",
+    *,
+    timeout: float = 5.0,
+    logger=None,
+) -> Tuple[int, str, str]:
+    """Stop a running pw-record process and return its exit info.
+
+    Sends SIGINT first (pw-record's polite shutdown signal), waits up
+    to `timeout` seconds, then SIGKILL if it didn't exit.
+
+    Returns:
+        (returncode, stdout_text, stderr_text)
+    """
+    if proc.poll() is not None:
+        # Already exited
+        out, err = proc.communicate()
+        return proc.returncode, out.decode("utf-8", errors="replace"), \
+            err.decode("utf-8", errors="replace")
+    try:
+        proc.send_signal(2)  # SIGINT
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            if logger:
+                logger("pw-record did not stop on SIGINT, killing")
+            proc.kill()
+            out, err = proc.communicate()
+    except ProcessLookupError:
+        # Already gone
+        out, err = b"", b""
+    return (
+        proc.returncode if proc.returncode is not None else -1,
+        out.decode("utf-8", errors="replace") if out else "",
+        err.decode("utf-8", errors="replace") if err else "",
+    )

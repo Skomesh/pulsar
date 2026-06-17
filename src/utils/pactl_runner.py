@@ -637,13 +637,21 @@ class PactlRunner:
         Return the names of real (non-null-sink) output sinks suitable for routing.
 
         These are the sinks a user would pick from a "Route to" dropdown.
+        A sink is considered "available hardware" if:
+          - It was NOT created by module-null-sink (so it's a real device,
+            not a virtual sink we built for routing)
+          - It is in RUNNING or SUSPENDED state (SUSPENDED = idle but still
+            routable, the device is just sleeping; UNAVAILABLE would mean
+            physically disconnected, but in practice PA/PW only emit
+            RUNNING and SUSPENDED for connected sinks)
+          - It has a monitor_source (some PW filters don't, and can't
+            be routed to via a loopback)
 
         Args:
             logger: Optional callback function to log command execution.
 
         Returns:
-            List of sink names. Excludes null-sinks and any sinks in SUSPENDED
-            state (unavailable devices).
+            List of sink names suitable as routing targets.
         """
         sinks = PactlRunner.list_sinks(logger)
         hardware = []
@@ -651,12 +659,14 @@ class PactlRunner:
             name = s.get('name', '')
             if not name:
                 continue
-            # Exclude null-sinks (virtual)
+            # Exclude null-sinks (virtual devices we created for routing)
             if PactlRunner.is_null_sink(name, logger):
                 continue
-            # Exclude suspended (unavailable) sinks
-            if s.get('state', '').upper() == 'SUSPENDED':
+            # Exclude sinks without a monitor_source (can't be loopback targets)
+            if not s.get('monitor_source'):
                 continue
+            # SUSPENDED is fine — it just means the sink is idle. The user
+            # can still route audio to it and it will wake up.
             hardware.append(name)
         return hardware
 

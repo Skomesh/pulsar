@@ -7,6 +7,7 @@ filter. The portal flow is tested via monkey-patched subprocess calls
 since triggering a real picker dialog from a test isn't possible.
 """
 
+import shutil
 import unittest
 from unittest import mock
 
@@ -15,23 +16,25 @@ from utils.pw_app_capture import (
     SOURCE_TYPE_WINDOW,
     PortalCapture,
     PortalCaptureError,
+    PwRecordError,
     _parse_object_path,
     discover_app_audio_nodes,
     portal_available,
     portal_available_source_types,
     portal_screencast_version,
+    pw_record_available,
+    start_pw_record,
+    stop_pw_record,
     supports_app_capture,
 )
 
 
 def pactl_or_pw_dump_available() -> bool:
     """Skip pw-dump tests if the tool isn't installed."""
-    import shutil
     return shutil.which("pw-dump") is not None
 
 
 def gdbus_available() -> bool:
-    import shutil
     return shutil.which("gdbus") is not None
 
 
@@ -333,6 +336,47 @@ class TestDiscoverAppAudioNodes(unittest.TestCase):
                          ["Stream/Input/Audio",
                           "Stream/Output/Audio",
                           "Stream/Output/Audio"])
+
+
+class TestPwRecord(unittest.TestCase):
+    """Tests for the pw-record wrapper functions."""
+
+    def test_pw_record_available(self):
+        # Just a wrapper around shutil.which, but verify the function
+        # exists and returns a sensible type.
+        result = pw_record_available()
+        self.assertIsInstance(result, bool)
+
+    @mock.patch("utils.pw_app_capture.shutil.which", return_value=None)
+    def test_start_pw_record_raises_when_not_installed(self, _):
+        with self.assertRaises(PwRecordError) as ctx:
+            start_pw_record(123, "/tmp/output.wav")
+        self.assertIn("pw-record not found", str(ctx.exception))
+
+    @mock.patch("utils.pw_app_capture.shutil.which", return_value="/usr/bin/pw-record")
+    @mock.patch("utils.pw_app_capture.subprocess.Popen")
+    def test_start_pw_record_builds_correct_command(self, mock_popen, _):
+        mock_popen.return_value = mock.MagicMock()
+        start_pw_record(456, "/tmp/x.wav", sample_rate=44100, channels=1)
+        cmd = mock_popen.call_args.args[0]
+        self.assertEqual(cmd[0], "/usr/bin/pw-record")
+        self.assertIn("--target", cmd)
+        self.assertIn("456", cmd)
+        self.assertIn("--rate", cmd)
+        self.assertIn("44100", cmd)
+        self.assertIn("--channels", cmd)
+        self.assertIn("1", cmd)
+        self.assertEqual(cmd[-1], "/tmp/x.wav")
+
+    def test_stop_pw_record_returns_exit_info(self):
+        fake_proc = mock.MagicMock()
+        fake_proc.poll.return_value = 0  # Already exited
+        fake_proc.returncode = 0
+        fake_proc.communicate.return_value = (b"", b"")
+        rc, out, err = stop_pw_record(fake_proc)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "")
+        self.assertEqual(err, "")
 
 
 if __name__ == "__main__":

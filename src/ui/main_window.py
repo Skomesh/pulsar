@@ -11,7 +11,7 @@ import sys
 import tempfile
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.pactl_runner import PactlRunner
@@ -70,6 +70,7 @@ class MainWindow:
         self.manage_tab = ttk.Frame(self.tab_control)
         self.profiles_tab = ttk.Frame(self.tab_control)
         self.capture_tab = ttk.Frame(self.tab_control)
+        self.hardware_tab = ttk.Frame(self.tab_control)
         self.output_tab = ttk.Frame(self.tab_control)
 
         # Add tabs to notebook
@@ -77,6 +78,7 @@ class MainWindow:
         self.tab_control.add(self.manage_tab, text="Manage")
         self.tab_control.add(self.profiles_tab, text="Profiles")
         self.tab_control.add(self.capture_tab, text="Capture")
+        self.tab_control.add(self.hardware_tab, text="Hardware")
         self.tab_control.add(self.output_tab, text="Output")
 
         # Bind tab change event to reset form state
@@ -89,6 +91,7 @@ class MainWindow:
         self.setup_manage_tab()
         self.setup_profiles_tab()
         self.setup_capture_tab()
+        self.setup_hardware_tab()
         self.setup_output_tab()
 
         # Status bar at the bottom
@@ -1436,6 +1439,220 @@ class MainWindow:
         finally:
             self.capture_app_button.config(state="normal")
             self._refresh_capture_status()  # Re-enable if still supported
+
+    def setup_hardware_tab(self):
+        """Set up the Hardware tab (Phase 5c: card profile management).
+
+        Lists all audio cards (USB, HDMI, BT, motherboard) and their
+        available profiles. The user can switch a card's active profile
+        — useful for:
+
+        - BT headsets: codec switching (HFP <-> A2DP <-> LDAC). BT codecs
+          expose as profiles like "headset_head_unit" or "a2dp_sink".
+        - HDMI/USB: switching between 2.0, 5.1, 7.1 surround output.
+        - Pro audio: switching to "pro-audio" profile for low-latency
+          studio work where the regular consumer profile adds latency.
+
+        Profile switching is rarely needed day-to-day, but when you DO
+        need it, you usually need it badly — and finding the right
+        profile in pavucontrol/alsamixer is painful.
+        """
+        outer = self._setup_scrollable_tab(self.hardware_tab, padding="10")
+
+        ttk.Label(
+            outer,
+            text=(
+                "Audio cards (hardware devices) on this system, with their "
+                "available profiles. Selecting a card shows its profiles; "
+                "click 'Activate' to switch. Active profile is marked."
+            ),
+            wraplength=700,
+        ).pack(anchor=tk.W, pady=(0, 10))
+
+        # Top section: card list (left) + profile list (right)
+        body = ttk.Frame(outer)
+        body.pack(fill=tk.BOTH, expand=True)
+
+        # Card list
+        card_frame = ttk.LabelFrame(body, text="Cards", padding="5")
+        card_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=(0, 5))
+        card_list_frame = ttk.Frame(card_frame)
+        card_list_frame.pack(fill=tk.BOTH, expand=True)
+        self.hardware_card_listbox = tk.Listbox(
+            card_list_frame, height=8, width=50, exportselection=False
+        )
+        self.hardware_card_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        card_scroll = ttk.Scrollbar(
+            card_list_frame, orient=tk.VERTICAL,
+            command=self.hardware_card_listbox.yview,
+        )
+        card_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.hardware_card_listbox.configure(yscrollcommand=card_scroll.set)
+        self.hardware_card_listbox.bind(
+            "<<ListboxSelect>>", self._on_hardware_card_selected
+        )
+
+        card_buttons = ttk.Frame(card_frame)
+        card_buttons.pack(fill=tk.X, pady=(5, 0))
+        ttk.Button(
+            card_buttons, text="Refresh",
+            command=self._refresh_hardware_cards, width=12,
+        ).pack(side=tk.LEFT)
+
+        # Profile list
+        profile_frame = ttk.LabelFrame(body, text="Profiles", padding="5")
+        profile_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(5, 0))
+        profile_list_frame = ttk.Frame(profile_frame)
+        profile_list_frame.pack(fill=tk.BOTH, expand=True)
+        self.hardware_profile_listbox = tk.Listbox(
+            profile_list_frame, height=8, exportselection=False
+        )
+        self.hardware_profile_listbox.pack(
+            side=tk.LEFT, fill=tk.BOTH, expand=True
+        )
+        profile_scroll = ttk.Scrollbar(
+            profile_list_frame, orient=tk.VERTICAL,
+            command=self.hardware_profile_listbox.yview,
+        )
+        profile_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.hardware_profile_listbox.configure(
+            yscrollcommand=profile_scroll.set
+        )
+
+        # Profile details / activate button
+        details_frame = ttk.Frame(profile_frame)
+        details_frame.pack(fill=tk.X, pady=(5, 0))
+        self.hardware_profile_details_var = tk.StringVar(
+            value="Select a card to see its profiles"
+        )
+        ttk.Label(
+            details_frame, textvariable=self.hardware_profile_details_var,
+            wraplength=400,
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        self.hardware_activate_button = ttk.Button(
+            details_frame, text="Activate Profile",
+            command=self._on_hardware_activate_profile,
+            state="disabled", width=15,
+        )
+        self.hardware_activate_button.pack(side=tk.LEFT)
+
+        # Cache of cards data keyed by index for selection lookup
+        self._hardware_cards: List[Dict[str, Any]] = []
+
+        # Initial load
+        self._refresh_hardware_cards()
+
+    def _refresh_hardware_cards(self):
+        """Reload the card list from pactl."""
+        try:
+            self._hardware_cards = PactlRunner.list_cards()
+        except Exception as e:
+            messagebox.showerror(
+                "Hardware error", f"Failed to enumerate cards: {e}"
+            )
+            self._hardware_cards = []
+        self.hardware_card_listbox.delete(0, tk.END)
+        for c in self._hardware_cards:
+            label = c.get("description") or c.get("name", "?")
+            active = c.get("active_profile", "")
+            if active:
+                # Trim long profile names for display
+                short = active.split("+")[0]
+                label = f"{label}    [active: {short}]"
+            self.hardware_card_listbox.insert(tk.END, label)
+        self.add_output(
+            f"Hardware: discovered {len(self._hardware_cards)} card(s)"
+        )
+        # Clear profile list
+        self.hardware_profile_listbox.delete(0, tk.END)
+        self.hardware_profile_details_var.set(
+            "Select a card to see its profiles"
+        )
+        self.hardware_activate_button.config(state="disabled")
+
+    def _on_hardware_card_selected(self, _event=None):
+        """Populate the profile list when a card is selected."""
+        sel = self.hardware_card_listbox.curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        if idx >= len(self._hardware_cards):
+            return
+        card = self._hardware_cards[idx]
+        # Populate profile listbox
+        self.hardware_profile_listbox.delete(0, tk.END)
+        for p in card.get("profiles", []):
+            marker = " ★ " if p["name"] == card.get("active_profile") else "   "
+            avail_tag = "" if p["available"] else " (unavailable)"
+            label = (
+                f"{marker}{p['name']}{avail_tag}\n"
+                f"     {p['description']} "
+                f"(sinks={p['sinks']}, sources={p['sources']}, "
+                f"priority={p['priority']})"
+            )
+            self.hardware_profile_listbox.insert(tk.END, label)
+        self.add_output(
+            f"Hardware: card '{card.get('description')}' has "
+            f"{len(card.get('profiles', []))} profile(s); "
+            f"active='{card.get('active_profile', '')}'"
+        )
+
+    def _on_hardware_activate_profile(self):
+        """Switch the selected card's profile to the highlighted one."""
+        sel_card = self.hardware_card_listbox.curselection()
+        sel_profile = self.hardware_profile_listbox.curselection()
+        if not sel_card or not sel_profile:
+            messagebox.showinfo(
+                "Activate Profile",
+                "Select a card and a profile first.",
+            )
+            return
+        card = self._hardware_cards[sel_card[0]]
+        profile_idx = sel_profile[0]
+        if profile_idx >= len(card.get("profiles", [])):
+            return
+        profile = card["profiles"][profile_idx]
+        if profile["name"] == card.get("active_profile"):
+            messagebox.showinfo(
+                "Activate Profile",
+                f"'{profile['name']}' is already active.",
+            )
+            return
+        if not profile["available"]:
+            if not messagebox.askyesno(
+                "Profile unavailable",
+                f"'{profile['name']}' is marked unavailable by PA/PipeWire. "
+                "It might activate but could fail or degrade. Try anyway?",
+            ):
+                return
+        # Confirm
+        if not messagebox.askyesno(
+            "Activate profile",
+            f"Switch '{card.get('description')}' to "
+            f"'{profile['description']}' ({profile['name']})?\n\n"
+            "Note: this may briefly disconnect running audio streams "
+            "using the current profile.",
+        ):
+            return
+        # Apply
+        ok = PactlRunner.set_card_profile(
+            card["name"], profile["name"], logger=self.add_output
+        )
+        if ok:
+            self.add_output(
+                f"Hardware: switched '{card.get('description')}' to "
+                f"profile '{profile['name']}'"
+            )
+            self.status_var.set(
+                f"Switched {card.get('description')} to {profile['name']}"
+            )
+            self._refresh_hardware_cards()
+        else:
+            messagebox.showerror(
+                "Profile switch failed",
+                f"pactl refused to switch to '{profile['name']}'. "
+                "Check the Output tab for stderr.",
+            )
 
     def setup_output_tab(self):
         """Set up the Output tab content."""

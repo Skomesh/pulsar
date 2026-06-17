@@ -820,6 +820,231 @@ class PactlRunner:
         )
         return return_code == 0
 
+    # ----------------------------------------------------------------------
+    # Card profiles (Phase 5c: hardware profiles for BT, HDMI, USB)
+    # ----------------------------------------------------------------------
+
+    @staticmethod
+    def list_cards(logger=None) -> List[Dict[str, Any]]:
+        """Return all audio cards (hardware devices) on the system.
+
+        Each entry has:
+          - name: card name (e.g. "alsa_card.usb-1532_Razer...")
+          - driver: backend driver (usually "alsa")
+          - active_profile: currently-selected profile name, or "" if off
+          - description: human-readable from device.description
+          - profiles: list of dicts, each with:
+              - name: profile identifier (e.g. "output:analog-stereo")
+              - description: human-readable (e.g. "Analog Stereo Output")
+              - sinks: number of sinks this profile creates
+              - sources: number of sources this profile creates
+              - priority: integer priority (higher = preferred)
+              - available: bool — whether the profile can be activated now
+
+        This is the data backing the Hardware tab's card profile switcher.
+        BT headsets show codec profiles (HFP, A2DP, etc.) here; HDMI/USB
+        devices show output format profiles (stereo, surround-51, etc.).
+        """
+        out, return_code = PactlRunner.run_command(
+            ['list', 'cards'], logger
+        )
+        if return_code != 0:
+            return []
+
+        cards: List[Dict[str, Any]] = []
+        # Each card block starts with "Card #N" and contains lines like:
+        #   Name: alsa_card.pci-...
+        #   Driver: alsa
+        #   Properties:
+        #     ...
+        #   Profiles:
+        #     off: Off (sinks: 0, sources: 0, priority: 0, available: yes)
+        #     ...
+        #   Active Profile: output:analog-stereo+input:mono-fallback
+        current: Optional[Dict[str, Any]] = None
+        # Track whether we're in the Profiles section of the current card
+        in_profiles = False
+        for line in out.splitlines():
+            stripped = line.rstrip()
+            if stripped.startswith("Card #"):
+                # Start of a new card block
+                if current is not None:
+                    cards.append(current)
+                current = {
+                    "name": "",
+                    "driver": "",
+                    "active_profile": "",
+                    "description": "",
+                    "profiles": [],
+                }
+                in_profiles = False
+                continue
+            if current is None:
+                continue
+            if stripped.startswith("\tName:"):
+                current["name"] = stripped.split(":", 1)[1].strip()
+            elif stripped.startswith("\tDriver:"):
+                current["driver"] = stripped.split(":", 1)[1].strip()
+            elif stripped.startswith("\tActive Profile:"):
+                current["active_profile"] = (
+                    stripped.split(":", 1)[1].strip()
+                )
+                in_profiles = False
+            elif stripped == "\tProfiles:":
+                in_profiles = True
+            elif in_profiles and stripped.startswith("\t\t"):
+                # Profile line: "name: Description (sinks: N, sources: N, priority: N, available: yes)"
+                # Strip the leading tabs
+                prof_str = stripped.lstrip("\t")
+                parsed = PactlRunner._parse_card_profile_line(prof_str)
+                if parsed is not None:
+                    current["profiles"].append(parsed)
+            else:
+                # Any other top-level card line ends the profiles section
+                if in_profiles and not stripped.startswith("\t\t\t"):
+                    in_profiles = False
+        # Don't forget the last card
+        if current is not None:
+            cards.append(current)
+
+        # Get descriptions from device.description property (preferred) or
+        # device.product.name (fallback). Properties live inside the card
+        # block. We've already parsed Properties by line but didn't keep them;
+        # do a second pass to extract descriptions.
+        return PactlRunner._attach_card_descriptions(cards)
+
+    @staticmethod
+    def _parse_card_profile_line(line: str) -> Optional[Dict[str, Any]]:
+        """Parse a single card profile line.
+
+        Format:
+            <name>: <description> (sinks: <n>, sources: <n>, priority: <n>, available: <yes/no>)
+
+        The name may itself contain colons (e.g. "output:analog-stereo+input:mono-fallback"),
+        so we split on the colon that appears immediately before the description
+        text. Strategy: find the parenthesized suffix if present, then within
+        what's left, the colon just before the description is the separator.
+
+        The parenthesized part may be missing for some profiles. Returns
+        None if the line can't be parsed as a profile line.
+        """
+        if ":" not in line:
+            return None
+        # Strip the parenthesized suffix if present — everything before
+        # the first "(" is "name: description".
+        paren_start = line.find("(")
+        if paren_start >= 0:
+            before_paren = line[:paren_start].rstrip()
+        else:
+            before_paren = line
+        # Find the colon that separates name from description. The
+        # description is the human-readable text after the last colon in
+        # the "name: description" portion. Name may contain colons.
+        # Convention: find the rightmost colon such that everything after
+        # it starts with a space (the space separates name from description).
+        colon_idx = -1
+        for i, ch in enumerate(before_paren):
+            if ch == ":" and i + 1 < len(before_paren) \
+                    and before_paren[i + 1] == " ":
+                colon_idx = i  # Keep updating — last such colon wins
+        if colon_idx < 0:
+            return None
+        name = before_paren[:colon_idx].strip()
+        desc = before_paren[colon_idx + 1:].strip()
+        # Now parse the parenthesized part
+        if paren_start >= 0:
+            paren_end = line.rfind(")")
+            if paren_end > paren_start:
+                paren_content = line[paren_start + 1:paren_end]
+                # Parse "sinks: 1, sources: 2, priority: 6500, available: yes"
+                kv: Dict[str, str] = {}
+                for piece in paren_content.split(","):
+                    if ":" not in piece:
+                        continue
+                    k, v = piece.split(":", 1)
+                    kv[k.strip()] = v.strip()
+                try:
+                    sinks = int(kv.get("sinks", "0") or "0")
+                except ValueError:
+                    sinks = 0
+                try:
+                    sources = int(kv.get("sources", "0") or "0")
+                except ValueError:
+                    sources = 0
+                try:
+                    priority = int(kv.get("priority", "0") or "0")
+                except ValueError:
+                    priority = 0
+                available = (kv.get("available", "no").lower() == "yes")
+                return {
+                    "name": name,
+                    "description": desc,
+                    "sinks": sinks,
+                    "sources": sources,
+                    "priority": priority,
+                    "available": available,
+                }
+        # No parens — minimal parse
+        return {
+            "name": name,
+            "description": desc,
+            "sinks": 0,
+            "sources": 0,
+            "priority": 0,
+            "available": False,
+        }
+
+    @staticmethod
+    def _attach_card_descriptions(cards: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Add a `description` field to each card by reading pactl list.
+
+        We re-parse pactl list cards to grab device.description /
+        device.product.name for each card. This is a separate pass
+        because the parsing of profiles needs to be tolerant of
+        format variations while still pulling the right description.
+        """
+        out, return_code = PactlRunner.run_command(
+            ['list', 'cards'], logger=None
+        )
+        if return_code != 0:
+            return cards
+        # Map: card name -> description
+        descriptions: Dict[str, str] = {}
+        current_name: Optional[str] = None
+        for line in out.splitlines():
+            stripped = line.rstrip()
+            if stripped.startswith("\tName:"):
+                current_name = stripped.split(":", 1)[1].strip()
+                descriptions.setdefault(current_name, "")
+            elif current_name and stripped.startswith("\t\tdevice.description"):
+                # Use the first device.description line we see
+                if not descriptions[current_name]:
+                    val = stripped.split("=", 1)[1].strip().strip('"')
+                    descriptions[current_name] = val
+            elif current_name and stripped.startswith("\t\tdevice.product.name"):
+                # Fallback if device.description is missing
+                if not descriptions[current_name]:
+                    val = stripped.split("=", 1)[1].strip().strip('"')
+                    descriptions[current_name] = val
+        for card in cards:
+            if card["name"] in descriptions:
+                card["description"] = descriptions[card["name"]]
+        return cards
+
+    @staticmethod
+    def set_card_profile(card_name: str, profile_name: str, logger=None) -> bool:
+        """Switch the active profile for a card.
+
+        Returns True on success. Common use cases:
+          - BT codec switching: HFP <-> A2DP <-> LDAC
+          - HDMI: 2.0 <-> 5.1 <-> 7.1
+          - USB: stereo <-> pro-audio
+        """
+        _, return_code = PactlRunner.run_command(
+            ['set-card-profile', card_name, profile_name], logger
+        )
+        return return_code == 0
+
     @staticmethod
     def _parse_volume_percent(output: str) -> Optional[int]:
         """Parse a `pactl get-sink-volume` / `get-source-volume` line.

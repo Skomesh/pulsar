@@ -14,6 +14,7 @@ from tkinter import filedialog, messagebox, ttk
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.pactl_runner import PactlRunner
 from utils.preset_manager import PresetManager
+from utils.profile_manager import ProfileManager
 
 
 class MainWindow:
@@ -34,6 +35,9 @@ class MainWindow:
         # Initialize preset manager
         self.preset_manager = PresetManager()
 
+        # Initialize profile manager (Phase 3: persist full routing topologies)
+        self.profile_manager = ProfileManager()
+
         # Output text for command results (will be initialized in setup_output_tab)
         self.output_text = None
 
@@ -50,11 +54,13 @@ class MainWindow:
         # Create tabs
         self.create_tab = ttk.Frame(self.tab_control)
         self.manage_tab = ttk.Frame(self.tab_control)
+        self.profiles_tab = ttk.Frame(self.tab_control)
         self.output_tab = ttk.Frame(self.tab_control)
 
         # Add tabs to notebook
         self.tab_control.add(self.create_tab, text="Create")
         self.tab_control.add(self.manage_tab, text="Manage")
+        self.tab_control.add(self.profiles_tab, text="Profiles")
         self.tab_control.add(self.output_tab, text="Output")
 
         # Bind tab change event to reset form state
@@ -65,6 +71,7 @@ class MainWindow:
         # Set up tab contents
         self.setup_create_tab()
         self.setup_manage_tab()
+        self.setup_profiles_tab()
         self.setup_output_tab()
 
         # Status bar at the bottom
@@ -617,6 +624,264 @@ class MainWindow:
 
         # Initial load
         self.refresh_all_views()
+
+    def setup_profiles_tab(self):
+        """Set up the Profiles tab content.
+
+        A profile captures a complete audio routing topology: which virtual
+        devices exist, what their settings are, and which loopbacks connect
+        them to real outputs. See src/utils/profile_manager.py for the
+        schema and src/main.py's docs/ for the design rationale.
+        """
+        outer = ttk.Frame(self.profiles_tab, padding="10")
+        outer.pack(fill=tk.BOTH, expand=True)
+
+        # --- Top: profile list (left) + buttons (right) --------------------
+        list_frame = ttk.LabelFrame(outer, text="Saved Profiles", padding="10")
+        list_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+
+        self.profile_listbox = tk.Listbox(list_frame, height=12, exportselection=False)
+        self.profile_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.profile_listbox.bind("<<ListboxSelect>>", self.on_profile_select)
+
+        list_scroll = ttk.Scrollbar(
+            list_frame, orient=tk.VERTICAL, command=self.profile_listbox.yview
+        )
+        list_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.profile_listbox.configure(yscrollcommand=list_scroll.set)
+
+        # --- Right side: action buttons + selected profile preview ---------
+        actions_frame = ttk.LabelFrame(
+            outer, text="Actions", padding="10"
+        )
+        actions_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(5, 0))
+
+        ttk.Button(
+            actions_frame, text="Apply Profile",
+            command=self.apply_selected_profile, width=20
+        ).pack(pady=3, fill=tk.X)
+
+        ttk.Button(
+            actions_frame, text="Save Current State",
+            command=self.save_current_state_as_profile, width=20
+        ).pack(pady=3, fill=tk.X)
+
+        ttk.Button(
+            actions_frame, text="Delete Profile",
+            command=self.delete_selected_profile, width=20
+        ).pack(pady=3, fill=tk.X)
+
+        ttk.Separator(actions_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=8)
+
+        ttk.Button(
+            actions_frame, text="Refresh List",
+            command=self.refresh_profile_list, width=20
+        ).pack(pady=3, fill=tk.X)
+
+        # --- Bottom: preview / details panel --------------------------------
+        details_frame = ttk.LabelFrame(outer, text="Selected Profile", padding="10")
+        details_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+
+        self.profile_details = tk.Text(
+            details_frame, height=8, wrap=tk.WORD, state=tk.DISABLED
+        )
+        self.profile_details.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        details_scroll = ttk.Scrollbar(
+            details_frame, orient=tk.VERTICAL, command=self.profile_details.yview
+        )
+        details_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.profile_details.configure(yscrollcommand=details_scroll.set)
+
+        # Initial population
+        self.refresh_profile_list()
+
+    def refresh_profile_list(self):
+        """Reload the list of saved profiles into the Listbox."""
+        self.profile_listbox.delete(0, tk.END)
+        try:
+            names = self.profile_manager.get_profile_names()
+        except Exception as e:
+            messagebox.showerror("Profile error", f"Failed to read profiles: {e}")
+            names = []
+        for n in sorted(names):
+            self.profile_listbox.insert(tk.END, n)
+        self._set_profile_details_text(
+            "Select a profile to see its details.\n\n"
+            "Tip: 'Save Current State' captures whatever null-sinks and "
+            "loopbacks currently exist on the system into a new profile."
+        )
+
+    def on_profile_select(self, _event=None):
+        """Show the selected profile's JSON in the details panel."""
+        name = self._get_selected_profile_name()
+        if not name:
+            return
+        profile = self.profile_manager.get_profile(name)
+        if not profile:
+            return
+        import json as _json
+        body = _json.dumps(profile, indent=2)
+        self._set_profile_details_text(body)
+
+    def _set_profile_details_text(self, text: str):
+        """Replace the contents of the profile details Text widget."""
+        self.profile_details.configure(state=tk.NORMAL)
+        self.profile_details.delete("1.0", tk.END)
+        self.profile_details.insert("1.0", text)
+        self.profile_details.configure(state=tk.DISABLED)
+
+    def _get_selected_profile_name(self) -> str:
+        sel = self.profile_listbox.curselection()
+        if not sel:
+            return ""
+        return self.profile_listbox.get(sel[0])
+
+    def apply_selected_profile(self):
+        """Apply the currently selected profile to the running audio system."""
+        name = self._get_selected_profile_name()
+        if not name:
+            messagebox.showinfo("Apply Profile", "Please select a profile first.")
+            return
+
+        profile = self.profile_manager.get_profile(name)
+        if not profile:
+            messagebox.showerror("Apply Profile", f"Profile '{name}' not found.")
+            return
+
+        # Confirm — applying unloads existing null-sinks and loopbacks.
+        n_dev = len(profile.get("devices", []))
+        n_route = len(profile.get("routing", []))
+        if not messagebox.askyesno(
+            "Apply Profile",
+            f"Apply profile '{name}'?\n\n"
+            f"  {n_dev} device(s) will be created\n"
+            f"  {n_route} loopback(s) will be created\n"
+            f"  All existing null-sinks and loopbacks will be unloaded.\n\n"
+            "Proceed?",
+        ):
+            return
+
+        self.add_output(f"$ Applying profile: {name}")
+        result = self.profile_manager.apply_profile(
+            profile, logger=self.add_output, unload_existing=True
+        )
+
+        if result["success"]:
+            self.status_var.set(
+                f"Applied profile '{name}': "
+                f"{len(result['created_devices'])} devices, "
+                f"{len(result['created_loopbacks'])} loopbacks"
+            )
+            self.refresh_all_views()
+            self.add_output(
+                f"Profile '{name}' applied successfully."
+            )
+        else:
+            err_text = "\n".join(f"  - {e}" for e in result["errors"])
+            self.add_output(f"Failed to apply profile '{name}':\n{err_text}")
+            if result.get("rolled_back"):
+                self.add_output("Rolled back partial changes.")
+            messagebox.showerror(
+                "Apply Profile",
+                f"Failed to apply profile '{name}':\n\n{err_text}\n\n"
+                + ("Rolled back partial changes." if result.get("rolled_back") else ""),
+            )
+
+    def save_current_state_as_profile(self):
+        """Capture the current null-sinks and loopbacks as a new profile."""
+        # Ask for a name via a simple dialog
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Save Profile")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        ttk.Label(
+            dialog, text="Profile name:", padding=(10, 10, 0, 0)
+        ).grid(row=0, column=0, sticky=tk.W)
+        name_var = tk.StringVar()
+        name_entry = ttk.Entry(dialog, textvariable=name_var, width=40)
+        name_entry.grid(row=1, column=0, padx=10, sticky=tk.EW)
+
+        ttk.Label(
+            dialog, text="Description (optional):", padding=(10, 5, 0, 0)
+        ).grid(row=2, column=0, sticky=tk.W)
+        desc_var = tk.StringVar()
+        ttk.Entry(dialog, textvariable=desc_var, width=40).grid(
+            row=3, column=0, padx=10, sticky=tk.EW
+        )
+
+        ttk.Label(
+            dialog,
+            text="Allowed: letters, digits, underscore, dot, dash",
+            font=("", 9, "italic"),
+            padding=(10, 5, 0, 0),
+        ).grid(row=4, column=0, sticky=tk.W)
+
+        result = {"ok": False}
+
+        def on_ok():
+            result["ok"] = True
+            dialog.destroy()
+
+        def on_cancel():
+            dialog.destroy()
+
+        btn_frame = ttk.Frame(dialog, padding=10)
+        btn_frame.grid(row=5, column=0, sticky=tk.EW)
+        ttk.Button(btn_frame, text="Save", command=on_ok).pack(side=tk.RIGHT, padx=2)
+        ttk.Button(btn_frame, text="Cancel", command=on_cancel).pack(side=tk.RIGHT, padx=2)
+
+        name_entry.focus_set()
+        dialog.bind("<Return>", lambda _e: on_ok())
+        dialog.bind("<Escape>", lambda _e: on_cancel())
+
+        self.root.wait_window(dialog)
+
+        if not result["ok"]:
+            return
+
+        name = name_var.get().strip()
+        if not name:
+            messagebox.showwarning("Save Profile", "Profile name cannot be empty.")
+            return
+
+        try:
+            profile = self.profile_manager.capture_topology(
+                name, description=desc_var.get().strip()
+            )
+        except Exception as e:
+            messagebox.showerror("Save Profile", f"Failed to capture state: {e}")
+            return
+
+        if not self.profile_manager.save_profile(name, profile):
+            messagebox.showerror("Save Profile", f"Failed to save profile '{name}'.")
+            return
+
+        self.add_output(
+            f"Saved profile '{name}': {len(profile['devices'])} devices, "
+            f"{len(profile['routing'])} loopbacks"
+        )
+        self.status_var.set(f"Saved profile '{name}'")
+        self.refresh_profile_list()
+
+    def delete_selected_profile(self):
+        """Delete the currently selected profile after confirmation."""
+        name = self._get_selected_profile_name()
+        if not name:
+            messagebox.showinfo("Delete Profile", "Please select a profile first.")
+            return
+        if not messagebox.askyesno(
+            "Delete Profile",
+            f"Delete profile '{name}'?\n\n"
+            "This removes it from disk. Your current audio topology is unaffected.",
+        ):
+            return
+        if self.profile_manager.delete_profile(name):
+            self.add_output(f"Deleted profile '{name}'")
+            self.status_var.set(f"Deleted profile '{name}'")
+            self.refresh_profile_list()
+        else:
+            messagebox.showerror("Delete Profile", f"Failed to delete '{name}'.")
 
     def setup_output_tab(self):
         """Set up the Output tab content."""

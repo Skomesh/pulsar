@@ -561,6 +561,64 @@ class MainWindow:
         # provides the scrollbar.
         frame = self._setup_scrollable_tab(self.manage_tab, padding="10")
 
+        # --- Quick Routing Panel (always visible) ---
+        # Prominent, prominent panel at the TOP so users immediately
+        # see how to route a selected virtual sink to hardware outputs.
+        # The tree below is where they pick what to route.
+        quick_route_frame = ttk.LabelFrame(
+            frame, text="Route Selected Sink", padding="10"
+        )
+        quick_route_frame.pack(fill=tk.X, padx=0, pady=(0, 10))
+        # Status line
+        self.quick_route_status_var = tk.StringVar(
+            value="Select a virtual sink below, then check the outputs you "
+                  "want its audio to play through, then click 'Apply Routing'."
+        )
+        ttk.Label(
+            quick_route_frame,
+            textvariable=self.quick_route_status_var,
+            wraplength=600, font=("", 9),
+        ).pack(anchor=tk.W, pady=(0, 5))
+        # Checkbox list of hardware outputs
+        self.quick_route_listbox_frame = ttk.Frame(quick_route_frame)
+        self.quick_route_listbox_frame.pack(fill=tk.X, pady=(0, 5))
+        self.quick_route_listbox = tk.Listbox(
+            self.quick_route_listbox_frame,
+            height=4,
+            selectmode=tk.EXTENDED,
+            exportselection=False,
+            font=("", 9),
+        )
+        self.quick_route_listbox.pack(
+            side=tk.LEFT, fill=tk.BOTH, expand=True
+        )
+        qr_scroll = ttk.Scrollbar(
+            self.quick_route_listbox_frame, orient=tk.VERTICAL,
+            command=self.quick_route_listbox.yview,
+        )
+        qr_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.quick_route_listbox.configure(yscrollcommand=qr_scroll.set)
+        # Buttons
+        qr_buttons = ttk.Frame(quick_route_frame)
+        qr_buttons.pack(fill=tk.X)
+        ttk.Button(
+            qr_buttons, text="Apply Routing",
+            command=self._on_quick_route_apply, width=15,
+        ).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(
+            qr_buttons, text="Stop All Routing",
+            command=self._on_quick_route_stop_all, width=15,
+        ).pack(side=tk.LEFT, padx=5)
+        ttk.Button(
+            qr_buttons, text="Refresh Outputs",
+            command=self._refresh_quick_route_outputs, width=15,
+        ).pack(side=tk.LEFT, padx=5)
+        # State for the quick route panel
+        self._quick_route_outputs: List[str] = []
+        self._quick_route_sink_name: Optional[str] = None
+        # Initial population of the output list
+        self._refresh_quick_route_outputs()
+
         # Add Show System Modules checkbox
         self.show_system_var = tk.BooleanVar(value=False)
         show_system_cb = ttk.Checkbutton(
@@ -646,7 +704,7 @@ class MainWindow:
         self.unload_button.pack(side=tk.LEFT, padx=5)
 
         self.remove_null_sinks_button = ttk.Button(
-            button_frame, text="Remove All Null Sinks", command=self.unload_all_null_sinks
+            button_frame, text="Remove All Virtual Devices", command=self.unload_all_null_sinks
         )
         self.remove_null_sinks_button.pack(side=tk.LEFT, padx=5)
 
@@ -1227,14 +1285,27 @@ class MainWindow:
             ),
             wraplength=700,
         ).pack(anchor=tk.W, pady=(0, 5))
+        # Filter checkbox — when checked, only hardware outputs are
+        # shown. Unchecked (default) also includes virtual sinks for
+        # OBS-style capture setups.
+        self._capture_route_hardware_only_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            route_frame,
+            text="Show hardware outputs only",
+            variable=self._capture_route_hardware_only_var,
+            command=self._populate_capture_route_options,
+        ).pack(anchor=tk.W)
         route_row = ttk.Frame(route_frame)
-        route_row.pack(fill=tk.X)
+        route_row.pack(fill=tk.X, pady=(5, 0))
         self.capture_route_var = tk.StringVar(value="")
         self.capture_route_combo = ttk.Combobox(
             route_row, textvariable=self.capture_route_var,
             state="readonly", values=(), width=50,
         )
         self.capture_route_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        self.capture_route_combo.bind(
+            "<<ComboboxSelected>>", self._on_capture_route_combo_select
+        )
         self.capture_route_button = ttk.Button(
             route_row, text="Route Here", width=12,
             command=self._on_capture_route_clicked, state="disabled",
@@ -1259,17 +1330,60 @@ class MainWindow:
         self._refresh_capture_tree()
 
     def _populate_capture_route_options(self):
-        """Refresh the Route To combo with current hardware outputs."""
+        """Refresh the Route To combo with available output sinks.
+
+        By default this includes both hardware outputs AND virtual
+        sinks — users often want to route an app's audio to a virtual
+        sink for OBS-style capture or to monitor an app without
+        routing it through the speakers. The user can use the
+        "Show hardware only" checkbox to filter the list if needed.
+        """
+        hardware = []
         try:
-            outputs = PactlRunner.list_hardware_outputs()
+            hardware = PactlRunner.list_hardware_outputs()
         except Exception as e:
-            outputs = []
             self.add_output(f"Capture route: failed to list outputs: {e}")
-        self.capture_route_combo.config(values=outputs)
-        if outputs:
-            self.capture_route_var.set(outputs[0])
+        # Also list virtual sinks — useful for routing an app's audio
+        # to a virtual sink as a monitoring target or as an OBS source
+        virtual = []
+        try:
+            sinks = PactlRunner.list_sinks(logger=self.add_output)
+            for s in sinks:
+                name = s.get("name", "")
+                if not name:
+                    continue
+                # Skip the easyeffects internal sinks (already virtual
+                # but they're better grouped with hardware for this
+                # purpose — they ARE the user's actual audio output
+                # path on systems with EasyEffects running)
+                if name in hardware:
+                    continue
+                # Filter by user setting
+                if self._capture_route_hardware_only_var.get():
+                    continue
+                # Mark virtual sinks with [virtual] suffix for clarity
+                virtual.append(f"{name}  [virtual]")
+        except Exception as e:
+            self.add_output(f"Capture route: failed to list virtual sinks: {e}")
+        # Hardware first (the user's actual speakers/headphones),
+        # then virtual (for monitoring/OBS capture)
+        all_outputs = hardware + virtual
+        self.capture_route_combo.config(values=all_outputs)
+        if all_outputs:
+            self.capture_route_var.set(all_outputs[0])
         else:
             self.capture_route_var.set("")
+        self._capture_route_all_outputs = all_outputs  # cache for sanitization
+
+    def _on_capture_route_combo_select(self, _event=None):
+        """Sanitize combo selection — strip [virtual] marker when reading."""
+        sel = self.capture_route_var.get()
+        if sel.endswith("  [virtual]"):
+            self.capture_route_var.set(sel.replace("  [virtual]", ""))
+
+    def _on_capture_route_refresh_outputs(self):
+        """Refresh the output dropdown (called when checkbox toggles)."""
+        self._populate_capture_route_options()
 
     def _on_capture_route_clicked(self):
         """Route the selected app's audio to the chosen hardware output.
@@ -1294,6 +1408,9 @@ class MainWindow:
             messagebox.showinfo("Route App Audio", "Select a stream first.")
             return
         target = self.capture_route_var.get()
+        # Strip the [virtual] marker if present
+        if target.endswith("  [virtual]"):
+            target = target.replace("  [virtual]", "")
         if not target:
             messagebox.showinfo(
                 "Route App Audio",
@@ -1301,17 +1418,24 @@ class MainWindow:
             )
             return
         # Find the sink that the selected Stream/Output/Audio node is
-        # connected to. We need its monitor source to loopback from.
+        # connected to. discover_app_audio_nodes already populated
+        # sink_name from pw-dump Links, so we just read it from the
+        # selected row's stored metadata.
         values = self.capture_tree.item(sel[0])["values"]
         if not values:
             return
         pw_id, app_str, cls, name = values
-        # Look up via pw-dump / pactl
-        try:
-            sink_name = self._find_sink_for_stream_node(int(pw_id))
-        except Exception as e:
-            sink_name = None
-            self.add_output(f"Capture route: could not find sink: {e}")
+        # Look up the sink_name from our parallel data structure.
+        # self._capture_nodes is updated whenever _refresh_capture_tree
+        # rebuilds the treeview, so the indices match.
+        sink_name = None
+        if hasattr(self, "_capture_nodes") and self._capture_nodes:
+            try:
+                idx = int(self.capture_tree.index(sel[0]))
+                if 0 <= idx < len(self._capture_nodes):
+                    sink_name = self._capture_nodes[idx].get("sink_name")
+            except (ValueError, tk.TclError):
+                pass
         if not sink_name:
             messagebox.showerror(
                 "Route failed",
@@ -1348,36 +1472,6 @@ class MainWindow:
                 "Route failed", f"Could not create loopback to '{target}'."
             )
 
-    def _find_sink_for_stream_node(self, pw_node_id: int) -> Optional[str]:
-        """Look up the PulseAudio sink name for a given PW node ID.
-
-        Strategy: enumerate `pactl list sink-inputs` and find the
-        entry whose owning client matches the PW node's client.
-        """
-        # Use pactl to find sink-inputs with the matching client.
-        # The PW node ID for a Stream/Output/Audio is unique per
-        # stream. We match via the application name parsed from
-        # the treeview (more robust).
-        # For now, since the treeview already gave us the Stream's
-        # application, look up the application's sink-input.
-        sink_inputs = PactlRunner.run_command(["list", "sink-inputs"])
-        if not sink_inputs:
-            return None
-        # Walk through the output looking for "Sink:" lines and
-        # matching index. The Stream/Output/Audio node is a
-        # sink-input; its Sink: line tells us which sink it's
-        # playing through.
-        out, _ = sink_inputs
-        current_sink = None
-        for line in out.splitlines():
-            if line.startswith("Sink: "):
-                current_sink = line.split("#", 1)[-1].strip()
-            if line.startswith("Sink Input #"):
-                idx = line.split("#", 1)[-1].strip()
-                if str(idx) == str(pw_node_id) and current_sink:
-                    return current_sink
-        return None
-
     def _refresh_capture_tree(self):
         """Re-scan for current app audio streams and rebuild the tree."""
         for item in self.capture_tree.get_children():
@@ -1389,6 +1483,9 @@ class MainWindow:
                 "Discovery error", f"Failed to enumerate nodes: {e}"
             )
             return
+        # Cache the discovery results so the route button can look
+        # up the sink_name for the currently selected row.
+        self._capture_nodes = nodes
         for n in nodes:
             self.capture_tree.insert(
                 "", tk.END,
@@ -2354,8 +2451,14 @@ class MainWindow:
         # Update routing panel — only meaningful for virtual sinks
         if entity_type == "sink":
             self.update_routing_panel(entity_name)
+            # Also update the prominent Quick Route panel at the top
+            # of the tab so users see what to do without scrolling.
+            self._quick_route_sink_name = entity_name
+            self._refresh_quick_route_panel()
         else:
             self.update_routing_panel(None)
+            self._quick_route_sink_name = None
+            self._refresh_quick_route_panel()
 
         # Update device controls panel — works for both sinks and sources
         # so the user can adjust a null-sink's playback volume OR a
@@ -2368,6 +2471,165 @@ class MainWindow:
             self.update_device_controls_panel(None)
 
         self.update_details_display(details)
+
+    # ------------------------------------------------------------------
+    # Quick Route panel (prominent panel at the top of the Manage tab)
+    # ------------------------------------------------------------------
+
+    def _refresh_quick_route_outputs(self):
+        """Re-list hardware outputs in the Quick Route checkbox listbox."""
+        try:
+            outputs = PactlRunner.list_hardware_outputs()
+        except Exception as e:
+            outputs = []
+            self.add_output(f"Quick route: failed to list outputs: {e}")
+        self._quick_route_outputs = outputs
+        # Preserve any active selection across refresh
+        prior = set(self.quick_route_listbox.curselection())
+        self.quick_route_listbox.delete(0, tk.END)
+        for i, name in enumerate(outputs):
+            # Pre-check outputs that already have an active loopback
+            # for the currently selected sink.
+            checked = i in prior
+            self.quick_route_listbox.insert(tk.END, name)
+            if checked:
+                self.quick_route_listbox.selection_set(i)
+        self._refresh_quick_route_panel()
+
+    def _refresh_quick_route_panel(self):
+        """Update the Quick Route panel's status line based on selection."""
+        sink = self._quick_route_sink_name
+        if not sink:
+            self.quick_route_status_var.set(
+                "Select a virtual sink in the tree below, then check the "
+                "outputs you want its audio to play through, then click "
+                "'Apply Routing'."
+            )
+            return
+        if not PactlRunner.is_null_sink(sink):
+            self.quick_route_status_var.set(
+                f"Selected: {sink} (hardware sink — routing not applicable)"
+            )
+            return
+        # Virtual sink — show current loopbacks
+        try:
+            monitor = PactlRunner.monitor_source_for(sink)
+            loopbacks = PactlRunner.list_loopbacks()
+            current_sinks = sorted({
+                lb["sink"] for lb in loopbacks
+                if lb.get("source") == monitor
+            })
+        except Exception:
+            current_sinks = []
+        if current_sinks:
+            self.quick_route_status_var.set(
+                f"Routing '{sink}' to: {', '.join(current_sinks)}. "
+                f"Check/uncheck outputs and click 'Apply Routing' to change."
+            )
+        else:
+            self.quick_route_status_var.set(
+                f"'{sink}' is not routed to any output. "
+                f"Check one or more outputs and click 'Apply Routing'."
+            )
+
+    def _on_quick_route_apply(self):
+        """Apply the routing for the currently selected sink to the
+        checked outputs in the Quick Route listbox.
+
+        Idempotent: routes that already exist are left alone; missing
+        routes are added; checked-but-already-routed boxes are kept;
+        unchecked loopbacks (when explicitly removed by the user) are
+        left intact — use 'Stop All Routing' to clear them.
+        """
+        sink = self._quick_route_sink_name
+        if not sink:
+            messagebox.showinfo(
+                "Apply Routing",
+                "Select a virtual sink in the tree first.",
+            )
+            return
+        if not PactlRunner.is_null_sink(sink):
+            messagebox.showinfo(
+                "Apply Routing",
+                f"'{sink}' is a hardware sink — nothing to route.",
+            )
+            return
+        sel = self.quick_route_listbox.curselection()
+        if not sel:
+            messagebox.showinfo(
+                "Apply Routing",
+                "Check at least one output in the list above.",
+            )
+            return
+        target_outputs = [self._quick_route_outputs[i] for i in sel]
+        monitor = PactlRunner.monitor_source_for(sink)
+        if not monitor:
+            messagebox.showerror(
+                "Apply Routing", f"Could not find monitor for '{sink}'."
+            )
+            return
+        # Pre-validate: all targets must exist as sinks
+        sinks = {s["name"] for s in PactlRunner.list_sinks()}
+        for t in target_outputs:
+            if t not in sinks:
+                messagebox.showerror(
+                    "Apply Routing",
+                    f"Output '{t}' does not exist anymore. Hit Refresh "
+                    "and try again.",
+                )
+                return
+        # Idempotent apply — only add missing loopbacks
+        existing = {
+            lb["sink"] for lb in PactlRunner.list_loopbacks()
+            if lb.get("source") == monitor
+        }
+        added = []
+        for t in target_outputs:
+            if t in existing:
+                continue
+            mod = PactlRunner.create_loopback(monitor, t, logger=self.add_output)
+            if mod:
+                added.append(t)
+        if added:
+            self.add_output(
+                f"Quick route: routed '{sink}' to {', '.join(added)}"
+            )
+        else:
+            self.add_output(
+                f"Quick route: '{sink}' already routes to all selected "
+                f"outputs (no changes)"
+            )
+        self._refresh_quick_route_panel()
+        self.refresh_all_views()
+
+    def _on_quick_route_stop_all(self):
+        """Stop all loopbacks for the currently selected sink."""
+        sink = self._quick_route_sink_name
+        if not sink:
+            messagebox.showinfo(
+                "Stop All Routing",
+                "Select a virtual sink in the tree first.",
+            )
+            return
+        if not PactlRunner.is_null_sink(sink):
+            messagebox.showinfo(
+                "Stop All Routing",
+                f"'{sink}' is a hardware sink — nothing to stop.",
+            )
+            return
+        monitor = PactlRunner.monitor_source_for(sink)
+        if not monitor:
+            return
+        stopped = 0
+        for lb in PactlRunner.list_loopbacks():
+            if lb.get("source") == monitor:
+                if PactlRunner.unload_loopback(lb["id"], logger=self.add_output):
+                    stopped += 1
+        self.add_output(
+            f"Quick route: stopped {stopped} loopback(s) for '{sink}'"
+        )
+        self._refresh_quick_route_panel()
+        self.refresh_all_views()
 
     # ------------------------------------------------------------------
     # Routing panel methods (Phase 2: loopback support)

@@ -496,7 +496,7 @@ class PactlRunner:
     def create_loopback(
         source_monitor: str,
         sink: str,
-        latency_msec: int = 1,
+        latency_msec: int = 50,
         logger=None,
     ) -> Optional[str]:
         """
@@ -517,8 +517,13 @@ class PactlRunner:
                              Example: 'game_sink.monitor'
             sink: Target sink name (real output device).
                   Example: 'alsa_output.pci-0000_00_1f.3.analog-stereo'
-            latency_msec: Loopback latency in milliseconds. 1ms is fine for desktop
-                          use; raise it for heavier DSP loads.
+            latency_msec: Loopback latency in milliseconds. Default 50ms is a
+                          good balance for desktop use — low enough that you
+                          don't notice the delay, high enough to avoid buffer
+                          underruns when going through DSP (easyeffects, etc.)
+                          which would otherwise cause robotic/crackly audio.
+                          Lower it (down to 5-10ms) for low-latency monitoring
+                          on light setups; raise it (100ms+) for very heavy DSP.
             logger: Optional callback function to log command execution.
 
         Returns:

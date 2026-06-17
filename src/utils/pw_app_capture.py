@@ -162,12 +162,63 @@ def discover_app_audio_nodes(logger=None) -> List[Dict[str, Any]]:
       - binary: e.g. "librewolf" (from props.application.process.binary)
       - pid: int or None (from props.application.process.id)
       - description: human-readable string ("LibreWolf - 1234 - Stream/Output/Audio")
+      - sink_name: For Stream/Output/Audio nodes, the name of the sink the
+        stream is currently connected to (e.g. "easyeffects_sink"). For
+        Stream/Input/Audio (capture), None. Computed via pw-dump Links
+        rather than `pactl list sink-inputs` because PA doesn't always
+        enumerate all PW stream nodes.
 
     Returns an empty list on error. Logs via `logger` if provided.
     """
     data = _run_pw_dump(logger)
     if data is None:
         return []
+
+    # Build lookup tables:
+    # - nodes_by_id: PW node id -> node name (for sink lookup)
+    nodes_by_id: Dict[int, str] = {}
+    # - sink_for_input_node: for each PW node id that's a Stream/Input/Audio
+    #   (an app playing audio), the sink name it's connected to (via Links)
+    sink_for_input_node: Dict[int, str] = {}
+
+    for d in data:
+        if d.get("type") != "PipeWire:Interface:Node":
+            continue
+        info = d.get("info", {})
+        props = info.get("props", {})
+        node_id_raw = d.get("id")
+        if not isinstance(node_id_raw, int):
+            continue
+        node_name = props.get("node.name", "")
+        nodes_by_id[node_id_raw] = node_name
+
+    # Now walk Links: a link has output-node-id and input-node-id. The
+    # naming is from the SPA graph perspective — output-port of one
+    # node feeds into input-port of another. For an app playing audio,
+    # the app's Stream/Output/Audio node is the OUTPUT side (its audio
+    # comes out) and the sink is the INPUT side (audio goes in).
+    #
+    # So for each link: output_node = source of audio, input_node = sink.
+    # We map source_node_id -> sink_name for Stream/Output/Audio nodes.
+    sink_for_input_node: Dict[int, str] = {}
+    for d in data:
+        if d.get("type") != "PipeWire:Interface:Link":
+            continue
+        info = d.get("info", {})
+        in_id = info.get("input-node-id")
+        out_id = info.get("output-node-id")
+        if not isinstance(in_id, int) or not isinstance(out_id, int):
+            continue
+        out_name = nodes_by_id.get(out_id, "")
+        in_name = nodes_by_id.get(in_id, "")
+        if not out_name or not in_name:
+            continue
+        # The link's output side is the audio SOURCE (e.g. an app's
+        # Stream/Output/Audio node). The input side is the SINK
+        # (where the audio is going). For our lookup, we want to
+        # find the sink for each stream node: out_id (source) -> in_name (sink).
+        if sink_for_input_node.get(out_id) is None:
+            sink_for_input_node[out_id] = in_name
 
     out: List[Dict[str, Any]] = []
     for d in data:
@@ -196,6 +247,7 @@ def discover_app_audio_nodes(logger=None) -> List[Dict[str, Any]]:
                 props.get("application.process.id") else None
         except ValueError:
             pid = None
+        sink_name = sink_for_input_node.get(node_id)
         out.append({
             "id": node_id,
             "node_name": node_name,
@@ -204,6 +256,7 @@ def discover_app_audio_nodes(logger=None) -> List[Dict[str, Any]]:
             "binary": binary,
             "pid": pid,
             "description": f"{app_name} ({pid or '?'}) - {mc}",
+            "sink_name": sink_name,
         })
 
     # Stable, useful ordering: input streams (capture) first, then output

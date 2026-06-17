@@ -329,13 +329,54 @@ class TestDiscoverAppAudioNodes(unittest.TestCase):
         ])
         result = discover_app_audio_nodes()
         # input streams first (alpha Stream/Input), then output streams
-        # sorted by app name (alpha, zulu)
+        # sorted by app name (alpha, alpha, zulu)
         self.assertEqual([n["application_name"] for n in result],
                          ["alpha", "alpha", "zulu"])
-        self.assertEqual([n["media_class"] for n in result],
-                         ["Stream/Input/Audio",
-                          "Stream/Output/Audio",
-                          "Stream/Output/Audio"])
+        # And each entry has a sink_name field (may be None if no Link)
+        for n in result:
+            self.assertIn("sink_name", n)
+
+    @mock.patch("utils.pw_app_capture._run_pw_dump")
+    def test_includes_sink_name_from_links(self, mock_run):
+        """sink_name is populated from pw-dump Links — the link's
+        input-node-id is the sink (where audio goes), output-node-id
+        is the source (e.g. the app's Stream/Output/Audio node)."""
+        mock_run.return_value = [
+            # Sink node
+            {"type": "PipeWire:Interface:Node", "id": 79,
+             "info": {"props": {"node.name": "easyeffects_sink",
+                                "media.class": "Audio/Sink"}}},
+            # App stream node
+            {"type": "PipeWire:Interface:Node", "id": 113,
+             "info": {"props": {"node.name": "LibreWolf",
+                                "media.class": "Stream/Output/Audio",
+                                "application.name": "LibreWolf",
+                                "application.process.binary": "librewolf",
+                                "application.process.id": "1234"}}},
+            # Link: app -> sink
+            {"type": "PipeWire:Interface:Link", "id": 241,
+             "info": {"output-node-id": 113, "input-node-id": 79,
+                      "state": "active"}},
+        ]
+        result = discover_app_audio_nodes()
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["application_name"], "LibreWolf")
+        self.assertEqual(result[0]["sink_name"], "easyeffects_sink")
+
+    @mock.patch("utils.pw_app_capture._run_pw_dump")
+    def test_sink_name_none_when_no_link(self, mock_run):
+        """If the app isn't connected to any sink (e.g. paused), sink_name is None."""
+        mock_run.return_value = [
+            {"type": "PipeWire:Interface:Node", "id": 113,
+             "info": {"props": {"node.name": "App",
+                                "media.class": "Stream/Output/Audio",
+                                "application.name": "App",
+                                "application.process.binary": "app",
+                                "application.process.id": "1"}}},
+        ]
+        result = discover_app_audio_nodes()
+        self.assertEqual(len(result), 1)
+        self.assertIsNone(result[0]["sink_name"])
 
 
 class TestPwRecord(unittest.TestCase):

@@ -1551,23 +1551,56 @@ class MainWindow:
             )
             return
         # Check for existing loopback from this monitor to target
+        # (idempotent: if already routed to the chosen target, no-op)
         existing = PactlRunner.list_loopbacks()
+        already_routed = False
         for lb in existing:
             if lb.get("source") == monitor and lb.get("sink") == target:
-                messagebox.showinfo(
-                    "Already routed",
-                    f"'{app_str}' is already routed to '{target}'.",
-                )
-                return
+                already_routed = True
+                break
+        if already_routed:
+            messagebox.showinfo(
+                "Already routed",
+                f"'{app_str}' is already routed to '{target}'.",
+            )
+            return
+        # Reroute path: if the app is currently routed elsewhere,
+        # remove the old loopbacks first. This makes the action
+        # "force hard enough" — the app's audio is now only heard
+        # on the new target, not duplicated. The user can always
+        # set up multiple targets via the Manage tab if they want
+        # duplication.
+        removed = []
+        if existing:
+            for lb in existing:
+                if lb.get("source") == monitor and lb.get("sink") != target:
+                    if PactlRunner.unload_loopback(
+                        lb["id"], logger=self.add_output
+                    ):
+                        removed.append(lb["sink"])
+        # Bug fix: create_loopback's first argument is the SOURCE
+        # monitor (e.g. "easyeffects_sink.monitor"), not the sink name
+        # itself. Earlier versions of this code passed sink_name
+        # directly, which created loopbacks with the wrong source
+        # field AND bypassed the existing-loopback check above (which
+        # looks for source == monitor). Result: clicking Route
+        # multiple times created infinite duplicate loopbacks.
         lb_id = PactlRunner.create_loopback(
-            sink_name, target, latency_msec=self.get_loopback_latency_ms(),
+            monitor, target, latency_msec=self.get_loopback_latency_ms(),
             logger=self.add_output,
         )
         if lb_id:
-            self.add_output(
-                f"Routed '{app_str}' (via {sink_name}) → '{target}' "
-                f"(loopback #{lb_id})"
-            )
+            if removed:
+                self.add_output(
+                    f"Rerouted '{app_str}' (via {sink_name}): "
+                    f"removed old route(s) to {', '.join(removed)} → "
+                    f"now on '{target}' (loopback #{lb_id})"
+                )
+            else:
+                self.add_output(
+                    f"Routed '{app_str}' (via {sink_name}) → '{target}' "
+                    f"(loopback #{lb_id})"
+                )
             self.refresh_all_views()
         else:
             messagebox.showerror(

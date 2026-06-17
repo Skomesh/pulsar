@@ -1,0 +1,38 @@
+# StreamAudio.sh is local-only — kept around as reference but not part of Pulsar
+StreamAudio.sh
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs and temp
+*.log
+*.tmp
+.pytest_cache/
+.mypy_cache/
+
+# User-specific
+presets/user_presets.json

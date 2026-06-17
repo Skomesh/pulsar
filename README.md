@@ -1,212 +1,67 @@
-# PulseAudio/PipeWire Control GUI (pactl-gui)
+# Pulsar
 
-A lightweight graphical user interface for managing audio modules and configurations on PulseAudio and PipeWire systems.
+A graphical audio routing manager for Linux, built on PulseAudio and PipeWire.
 
-## Project Overview
+Pulsar is a fork of [pactl-gui](https://github.com/Skrappjaw/pactl-gui) by Skrappjaw, licensed under MIT. We're extending it with routing features aimed at streamers, gamers, and content creators who need to split audio between apps (game, voice chat, music, microphone) into independently controllable channels.
 
-PulseAudio/PipeWire Control GUI provides a simple, user-friendly interface for common audio management tasks that would otherwise require command-line expertise. The application works with both PulseAudio and PipeWire systems, focusing on managing audio modules, creating virtual devices, and setting up audio routing configurations for specific use cases.
+## What Pulsar adds over pactl-gui
 
-## Current Features (MVP)
+- **Sink / Source / Both (duplex)** choice at device creation time
+- **Loopback routing** — wire virtual devices to your real output with one click
+- **Profile persistence** — save and reload complete routing topologies
+- **Streamer-oriented defaults** — opinionated presets for game + voice + music + mic
 
-- **Sink/Source Management**: View all PulseAudio sinks and sources with details
-- **Duplex Sink Creation**: Create duplex sinks with custom names and channel configurations
-- **Module Management**: View and unload PulseAudio modules
-- **Basic Preset Saving**: Save current configuration as a preset
-- **Command Output Display**: View the results of PulseAudio operations
+## Status
 
-## Screenshots
+Early development. Currently inheriting pactl-gui's MVP feature set; Pulsar-specific features are landing incrementally.
 
-### Main Interface
-![Main Interface](docs/screenshots/pactl-gui-main-interface.jpg)
+## Requirements
 
-### Device Management
-Organized hardware device grouping with individual device controls:
-![Device Management](docs/screenshots/pactl-gui-device-management.jpg)
-
-### Command Logging
-Real-time command execution tracking and output:
-![Output Tab](docs/screenshots/pactl-gui-output-tab.png)
-
-## Future Features
-
-- **Preset Loading**: Load saved configurations
-- **Terminal Integration**: Execute custom PulseAudio commands with real-time feedback
-- **Advanced Configuration Options**: More detailed module configurations
-- **Visual Audio Routing**: Visualize and modify audio connections
-
-## Target Users
-
-- Linux gaming enthusiasts who need special audio configurations
-- Content creators who require complex audio routing
-- Audio professionals working with virtual devices
-- Regular users who find PulseAudio CLI commands intimidating
-
-## Design Philosophy
-
-The application adheres to the following principles:
-
-1. **Lightweight**: Minimal dependencies and system resource usage
-2. **User-Friendly**: Simple interface that abstracts complex commands
-3. **Powerful**: Provide access to full PulseAudio functionality
-4. **Educational**: Help users understand PulseAudio concepts
-
-## Technology Stack
-
-- **Frontend**: Python with Tkinter (minimal dependencies)
-- **Backend**: Direct interaction with PulseAudio via `pactl` commands
-
-## Getting Started
-
-### Prerequisites
-
+- Linux with PulseAudio **or** PipeWire (most modern distros include one pre-configured)
 - Python 3.6+
-- **Either** PulseAudio OR PipeWire audio system (most modern Linux distributions include one of these)
-- Tkinter (Python's standard GUI package)
+- Tkinter
+- The `pactl` command-line utility
 
-**Note**: This application works with both PulseAudio and PipeWire systems. Most modern Linux distributions come with either PulseAudio or PipeWire already installed and configured. You typically don't need to install additional audio system packages.
-
-### Installing Dependencies
-
-#### Python and Tkinter
-The main dependencies you may need to install are Python 3 and Tkinter:
-
-**Python 3**: Usually pre-installed on most Linux distributions. Check with:
-```bash
-python3 --version
-```
-
-**Tkinter**: Usually included with Python, but may need separate installation:
 ```bash
 # Debian/Ubuntu
-sudo apt-get install python3-tk
+sudo apt-get install python3-tk pulseaudio-utils
 
 # Fedora
-sudo dnf install python3-tkinter
+sudo dnf install python3-tkinter pulseaudio-utils
 
-# openSUSE
-sudo zypper install python313-tk  # Replace 313 with your Python version
-
-# Arch Linux
-sudo pacman -S tk
+# Arch
+sudo pacman -S tk pulseaudio
 ```
 
-#### Audio System Compatibility
-This application works with:
-- **PulseAudio**: Uses `pactl` commands (widely supported)
-- **PipeWire**: Compatible through PulseAudio compatibility layer
+## Installation
 
-**Checking your audio system**:
 ```bash
-# Check if pactl is available (should work on both systems)
-which pactl
-
-# Check what audio system you're running
-systemctl --user status pulseaudio pipewire-pulse
-```
-
-**If pactl is missing** (rare on modern systems):
-```bash
-# Debian/Ubuntu
-sudo apt-get install pulseaudio-utils
-
-# Fedora
-sudo dnf install pulseaudio-utils
-
-# openSUSE
-sudo zypper install pulseaudio-utils
-
-# Arch Linux
-sudo pacman -S pulseaudio
-```
-
-### Installation
-
-There are two ways to install PulseAudio Control GUI:
-
-#### Option 1: Automatic Installation (Recommended)
-
-1. Clone the repository:
-```bash
-git clone https://github.com/Skrappjaw/pactl-gui.git
-cd pactl-gui
-```
-
-2. Run the installation script:
-```bash
+git clone https://github.com/Skomesh/pulsar.git
+cd pulsar
 ./install.sh
+pulsar        # or run from application menu
 ```
 
-The installer will:
-- Check for all required dependencies
-- Install the application to your user directory (`~/.local/share/pactl-gui`)
-- Create a command-line launcher (`pactl-gui` command)
-- Add a desktop entry for your application menu
-- Provide helpful feedback and error messages
-
-3. Launch the application:
-- From your application menu: **Audio → PulseAudio GUI**
-- From terminal: `pactl-gui`
-
-#### Option 2: Manual Installation
-
-If you prefer to run directly from the source directory:
+To run without installing:
 
 ```bash
-# Clone the repository
-git clone https://github.com/Skrappjaw/pactl-gui.git
-cd pactl-gui
-
-# Run the application directly
 python3 src/main.py
 ```
 
-#### Uninstallation
+## Syncing with upstream
 
-To remove the application completely:
+Pulsar tracks pactl-gui as upstream. To pull in future improvements from the original project:
+
 ```bash
-# If installed with install.sh:
-~/.local/share/pactl-gui/uninstall.sh
-
-# Or use the uninstall script from the source directory:
-./uninstall.sh
+git fetch upstream
+git merge upstream/main
 ```
-
-### Usage
-
-The application is organized into tabs:
-
-1. **Create**: Create new duplex sinks with custom names and channel configurations
-2. **Manage**: View and manage existing sinks, sources, and modules
-3. **Output**: View the output of audio system commands
-
-#### Creating a Duplex Sink
-
-1. Go to the "Create" tab
-2. Enter a unique name for the sink (no spaces, used as internal identifier)
-3. Enter a human-readable description (shown in audio controls)
-4. Select the number of channels (1=mono, 2=stereo, etc.)
-5. Click "Create Duplex Sink"
-
-#### Managing Modules
-
-1. Go to the "Manage" tab
-2. View the list of loaded modules
-3. Select a module and click "Unload Selected Module" to remove it
-
-#### Saving Presets
-
-1. Go to the "File" menu
-2. Select "Save Preset..."
-3. Enter a name for the preset
-
-## Project Status
-
-Currently in early development with basic MVP functionality implemented.
 
 ## License
 
-[MIT License](LICENSE)
+MIT — same as the upstream pactl-gui project. See the original [LICENSE](https://github.com/Skrappjaw/pactl-gui/blob/main/LICENSE) for the canonical text.
 
-## Contributing
+## Credits
 
-Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to get involved.
+- Original project: [Skrappjaw/pactl-gui](https://github.com/Skrappjaw/pactl-gui)
+- This fork: Skomesh/Pulsar

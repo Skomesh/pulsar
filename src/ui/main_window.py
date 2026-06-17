@@ -97,8 +97,58 @@ class MainWindow:
 
     def setup_create_tab(self):
         """Set up the Create tab content."""
-        frame = ttk.Frame(self.create_tab, padding="10")
-        frame.pack(fill=tk.BOTH, expand=True)
+        # Wrap content in a Canvas+Scrollbar so it scrolls when the window
+        # is shorter than the content. The actual widgets live on `frame`,
+        # which is a window inside the canvas.
+        canvas = tk.Canvas(self.create_tab, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(
+            self.create_tab, orient=tk.VERTICAL, command=canvas.yview
+        )
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        frame = ttk.Frame(canvas, padding="10")
+        frame_window = canvas.create_window((0, 0), window=frame, anchor=tk.NW)
+
+        # Update scrollregion when frame contents change size
+        def _on_frame_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        # Make the inner frame match the canvas width so widgets fill horizontally
+        def _on_canvas_configure(event):
+            canvas.itemconfigure(frame_window, width=event.width)
+
+        frame.bind("<Configure>", _on_frame_configure)
+        canvas.bind("<Configure>", _on_canvas_configure)
+
+        # Mouse-wheel scrolling — bound to canvas and propagated to the inner
+        # frame so scrolling works wherever the cursor is over the tab.
+        def _on_mousewheel(event):
+            # event.delta is non-zero on macOS/Windows; num is for X11
+            if event.delta:
+                delta = -1 * (event.delta // 120)
+            elif event.num == 4:
+                delta = -1
+            elif event.num == 5:
+                delta = 1
+            else:
+                delta = 0
+            if delta:
+                canvas.yview_scroll(delta, "units")
+
+        def _bind_wheel(_event):
+            canvas.bind_all("<MouseWheel>", _on_mousewheel)
+            canvas.bind_all("<Button-4>", _on_mousewheel)
+            canvas.bind_all("<Button-5>", _on_mousewheel)
+
+        def _unbind_wheel(_event):
+            canvas.unbind_all("<MouseWheel>")
+            canvas.unbind_all("<Button-4>")
+            canvas.unbind_all("<Button-5>")
+
+        canvas.bind("<Enter>", _bind_wheel)
+        canvas.bind("<Leave>", _unbind_wheel)
 
         # Add descriptive label
         ttk.Label(

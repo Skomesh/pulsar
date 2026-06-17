@@ -123,6 +123,7 @@ New schema (rename concept to "profile" or keep "preset" — decide in this phas
 {
   "Game and Teamspeak": {
     "created": "...",
+    "schema_version": 2,
     "devices": [
       {"name": "game_sink", "type": "sink", "channels": 2, "description": "Game Audio"},
       {"name": "teamspeak_sink", "type": "sink", "channels": 2, "description": "Voice"},
@@ -131,6 +132,10 @@ New schema (rename concept to "profile" or keep "preset" — decide in this phas
     "routing": [
       {"from": "game_sink.monitor", "to": "alsa_output.pci-0000_00_1f.3.analog-stereo"},
       {"from": "teamspeak_sink.monitor", "to": "alsa_output.pci-0000_00_1f.3.analog-stereo"}
+    ],
+    "app_routing": [
+      {"match_application": "discord", "sink": "teamspeak_sink"},
+      {"match_application": "steam_app_440", "sink": "game_sink"}
     ]
   }
 }
@@ -138,23 +143,29 @@ New schema (rename concept to "profile" or keep "preset" — decide in this phas
 
 **Backend:**
 - New schema version field for migration safety
-- `load_profile(name)` — creates all devices, then creates all routing
+- `load_profile(name)` — creates all devices, then creates all routing, then applies app routing
 - `delete_profile(name)` — unloads all modules in the profile
 - `apply_profile(name)` — atomic-ish: if anything fails mid-way, offer to roll back
 - `get_active_profile()` — diff the running config against stored profiles to detect "modified by user externally"
+- **Stream metadata enrichment:** parse `pw-dump` JSON to show "Discord — #general voice (PID 12345)" instead of "sink-input 42"
+- **Live updates:** subscribe to `pw-dump --monitor` (or `pactl subscribe`) so the UI refreshes when external changes happen (user changes volume in pavucontrol, app starts/stops)
+- **`wpctl set-default` for per-app persistence** — pin a specific app's audio to a specific sink via WirePlumber's default-routes mechanism, so the choice survives app restarts
 
 **UI:**
 - New tab: **Profiles** (or merge into Manage tab — decide based on tab count)
 - List of saved profiles with Apply / Edit / Delete buttons
 - "Save current state as profile" button on Create and Manage tabs
 - On startup: detect if saved profile matches current config, show indicator
+- App-routing editor: drag-drop apps to sinks, or "Discord → always goes to teamspeak_sink" toggle
 
 **Migration:**
-- Existing `user_presets.json` files keep working — wrap old format in a new envelope with empty `devices` and `routing` arrays
+- Existing `user_presets.json` files keep working — wrap old format in a new envelope with empty `devices`, `routing`, and `app_routing` arrays
 
-**Done when:** You can click "Apply: Game and Teamspeak" and the entire `StreamAudio.sh` setup happens via GUI.
+**Done when:** You can click "Apply: Game and Teamspeak" and the entire `StreamAudio.sh` setup happens via GUI, AND Discord's audio is automatically pinned to `teamspeak_sink` even after restarting Discord.
 
-**Estimated complexity:** Medium-large. ~500 lines, including migration code.
+**Estimated complexity:** Medium-large. ~600 lines, including migration code.
+
+**Reference:** See `docs/PIPEWIRE_RESEARCH.md` for the underlying WP/pw-dump/pw-cli APIs that make this work.
 
 ---
 
@@ -166,12 +177,18 @@ New schema (rename concept to "profile" or keep "preset" — decide in this phas
 - **Bundled starter profiles:** ship 2-3 built-in profiles (Gaming, Streaming, Voice Chat Only) that appear in the Profiles list on first run
 - **System tray integration:** minimize to tray, right-click menu for "Apply Game profile" / "Apply Stream profile"
 - **Profile auto-switching:** detect when a specific app launches (e.g. Discord, OBS, Steam Big Picture) and offer to apply a profile
-- **Volume sliders per channel:** not just mute/unmute — give each routed device its own volume (this is what pavucontrol does for inputs, we add it for our virtual sinks)
+- **Volume sliders per channel:** not just mute/unmute — give each routed device its own volume (this is what pavucontrol does for inputs, we add it for our virtual sinks). Use `wpctl set-volume` or `pactl set-sink-volume`.
 - **Better empty states:** when no virtual devices exist, show "Create your first virtual audio device" with a one-click "Gaming setup" button that creates all three sinks in one shot
+- **Bluetooth device profiles** — show available profiles (HFP/A2DP) and let user switch with `wpctl set-profile`. Also show codec selection if available.
+- **HDMI/USB device routing** — show profiles/routes for hardware with multiple outputs; let user pin a default
+- **Combine-stream preset** — "music plays on speakers AND headphones simultaneously" using `module-combine-stream`. UI: "send this sink to multiple outputs" toggle.
+- **Echo-cancellation preset** — one-click "VoIP mode" that loads `module-echo-cancel` with WebRTC AEC. Many users don't know this exists.
 
 **Done when:** A new user can install Pulsar and have a working streaming setup in under 60 seconds without reading docs.
 
-**Estimated complexity:** Large. ~800 lines + design decisions.
+**Estimated complexity:** Large. ~1000 lines + design decisions.
+
+**Reference:** See `docs/PIPEWIRE_RESEARCH.md` Tier 1 features 4–5 and Tier 2 features 7–9 for the underlying APIs.
 
 ---
 
@@ -181,18 +198,32 @@ New schema (rename concept to "profile" or keep "preset" — decide in this phas
 
 **Why:** Some advanced routing is impossible or awkward in PA-compat mode. These features only work when running against PipeWire directly.
 
-**Features:**
-- **Filter graphs:** use `pw-cli` and `pw-top` to introspect and modify the WirePlumber graph directly — far more powerful than `pactl` loopbacks
-- **Per-stream volume via WirePlumber:** persist per-app volumes across restarts (PA doesn't, PipeWire+WirePlumber does)
-- **Screen-share audio routing:** PipeWire's killer feature — capture just one app's audio without routing through a null-sink (the "screen capture audio" pattern)
-- **Sample-rate conversion display:** show what each device is running at; warn on mismatches
+**Phase 5a — Per-application audio capture (the killer feature):**
+- Use the xdg-desktop-portal ScreenCast API (`AvailableSourceTypes=7` confirmed on this system — APPLICATION capture is available)
+- Workflow: user clicks "Capture Discord audio in OBS" → Pulsar queries WP for Discord's audio nodes → tells OBS (via WebSocket) to add a PipeWire audio capture source for that specific app node → no virtual sink needed
+- See `docs/PIPEWIRE_RESEARCH.md` Section D for the full rationale
+
+**Phase 5b — Advanced graph features:**
+- **Custom filter chains:** wrap `module-filter-chain` for routing audio through LADSPA/LV2 filters. Note: this is borderline with easyeffects territory; consider it a power-user escape hatch only.
+- **Combine-stream editor:** expose the `module-combine-stream` config UI for arbitrary mixing (e.g. "mic + system audio both go to OBS").
+- **pw-cli link management:** for power users who want per-port routing (e.g. only the front-left/right of a 5.1 stream goes to headphones, not the LFE channel).
+
+**Phase 5c — Hardware integrations:**
+- **Bluetooth codec selection** (SBC/AAC/aptX/LDAC) — show current codec, let user switch. Requires WirePlumber settings API.
+- **Headset profile switching** — HFP for voice chat, A2DP for quality. `wpctl set-profile`.
+- **HDMI hot-plug handling** — when a TV connects/disconnects, offer to apply the appropriate profile.
+- **USB device quirks** — detect feedback-capable devices and warn users.
 
 **Detection:**
 - Check `pactl info` for "Server Name: PulseAudio (on PipeWire X.Y.Z)" — if PipeWire, enable these features in the UI; if pure PA, hide them
+- Verify portal ScreenCast version ≥ 4 and AvailableSourceTypes includes APPLICATION (bit 3 = 4)
 
-**Done when:** A user on PipeWire can route Discord's audio to OBS without ever creating a virtual device, just by selecting it in a dropdown.
+**Done when:**
+- 5a: A user can route Discord's audio to OBS without ever creating a virtual device
+- 5b: Power users can build custom filter graphs via the GUI
+- 5c: Bluetooth headphones show their codec and let the user switch
 
-**Estimated complexity:** Large. Requires PipeWire-specific knowledge; consider targeting only one feature first.
+**Estimated complexity:** Large. Requires PipeWire-specific knowledge; consider targeting one sub-phase at a time.
 
 ---
 
@@ -249,8 +280,34 @@ To stay focused, Pulsar is NOT trying to be:
 
 ---
 
+## Phase 7 — Diagnostics
+
+**Goal:** Help users figure out why their audio isn't working.
+
+**Features:**
+- **Embedded `pw-top` view** — read-only real-time node/device graph, scrollable, sortable by latency
+- **Sample-rate mismatch detector** — warn when a device is running at a different rate than the system clock (causes resampling overhead and subtle quality loss)
+- **Quantum/latency inspector** — show per-driver quantum, suggest tuning for low-latency use cases
+- **Module dependency viewer** — show which loopbacks depend on which sinks; help debug "why did my music_sink disappear when I unloaded game_sink?"
+- **"Why isn't my audio working?" wizard** — checks: is pactl/pw-cli reachable? Is WirePlumber running? Is the user in the audio group? Are required modules loaded?
+- **Live log viewer** — tail `pw-top --batch-mode` output for debugging
+
+**API basis:** `pw-top` for live stats, `pw-dump --monitor` for graph state, `wpctl status` for device summary.
+
+**Done when:** A non-expert user can open the Diagnostics tab and immediately see why their microphone isn't reaching Discord.
+
+**Estimated complexity:** Medium. ~400 lines, mostly UI work wrapping existing CLI tools.
+
+---
+
 ## Tracking
 
 - One GitHub issue per phase, with a checklist matching the tasks above
 - One PR per logical unit of work (not per phase — phases are too big for single PRs)
 - Tag releases as `v0.1.0` after Phase 1, `v0.2.0` after Phase 2, etc.
+
+---
+
+## Further Reading
+
+- `docs/PIPEWIRE_RESEARCH.md` — comprehensive PipeWire/WirePlumber feature inventory and module reference. Read this before starting Phase 3+.

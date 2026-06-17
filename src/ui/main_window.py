@@ -708,19 +708,38 @@ class MainWindow:
         self.refresh_profile_list()
 
     def refresh_profile_list(self):
-        """Reload the list of saved profiles into the Listbox."""
+        """Reload the list of saved profiles into the Listbox.
+
+        Built-in profiles show a "(built-in)" suffix. Built-ins that are
+        currently shadowed by a user profile of the same name show
+        "(built-in, your edits)" so the user knows their version is in
+        effect and the original is still recoverable.
+        """
         self.profile_listbox.delete(0, tk.END)
         try:
             names = self.profile_manager.get_profile_names()
         except Exception as e:
             messagebox.showerror("Profile error", f"Failed to read profiles: {e}")
             names = []
+        # Insert with a visible label so built-ins vs user profiles are
+        # distinguishable. The actual name is preserved for selection
+        # logic — we just store the display label in a parallel list.
+        self._profile_display_names = []  # index -> label
+        self._profile_actual_names = []   # index -> real name
         for n in sorted(names):
-            self.profile_listbox.insert(tk.END, n)
+            if self.profile_manager.is_builtin_name(n):
+                shadowed = self.profile_manager.is_shadowed_by_user(n)
+                label = f"{n}  (built-in, your edits)" if shadowed else f"{n}  (built-in)"
+            else:
+                label = n
+            self.profile_listbox.insert(tk.END, label)
+            self._profile_display_names.append(label)
+            self._profile_actual_names.append(n)
         self._set_profile_details_text(
             "Select a profile to see its details.\n\n"
-            "Tip: 'Save Current State' captures whatever null-sinks and "
-            "loopbacks currently exist on the system into a new profile."
+            "Built-in profiles (e.g. Gaming, Streaming, Voice Chat Only) are "
+            "shipped with Pulsar. Use 'Save Current State' to capture your "
+            "own setup, which will appear here without the (built-in) tag."
         )
 
     def on_profile_select(self, _event=None):
@@ -746,7 +765,12 @@ class MainWindow:
         sel = self.profile_listbox.curselection()
         if not sel:
             return ""
-        return self.profile_listbox.get(sel[0])
+        idx = sel[0]
+        actual = getattr(self, "_profile_actual_names", [])
+        if idx < len(actual):
+            return actual[idx]
+        # Fallback for an unexpected state — return the displayed text
+        return self.profile_listbox.get(idx)
 
     def apply_selected_profile(self):
         """Apply the currently selected profile to the running audio system."""
@@ -877,10 +901,27 @@ class MainWindow:
         self.refresh_profile_list()
 
     def delete_selected_profile(self):
-        """Delete the currently selected profile after confirmation."""
+        """Delete the currently selected profile after confirmation.
+
+        Built-in profiles cannot be deleted — they're shipped with Pulsar.
+        If the user has shadowed a built-in with their own version, only
+        the user version is deleted (the built-in becomes visible again).
+        """
         name = self._get_selected_profile_name()
         if not name:
             messagebox.showinfo("Delete Profile", "Please select a profile first.")
+            return
+        # If this name is a built-in AND the user hasn't shadowed it,
+        # there is nothing to delete (the data lives in builtin_profiles.json).
+        if self.profile_manager.is_builtin_name(name) and \
+                not self.profile_manager.is_shadowed_by_user(name):
+            messagebox.showinfo(
+                "Delete Profile",
+                f"'{name}' is a built-in profile and cannot be deleted.\n\n"
+                "If you want to remove it from your list, you can shadow it "
+                "with your own version using 'Save Current State' (using the "
+                "same name), then delete the shadow.",
+            )
             return
         if not messagebox.askyesno(
             "Delete Profile",

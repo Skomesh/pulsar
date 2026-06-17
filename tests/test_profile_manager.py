@@ -102,16 +102,32 @@ class TestMigration(unittest.TestCase):
     def test_load_all_profiles_migrates_v1_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             pm = ProfileManager(presets_dir=tmp)
-            # Write a v1 file
+            # Write a v1 file with user profile names
             pm._save_raw({
                 "Stereo": {"channels": "2", "builtin": True},
                 "MyCustom": {"channels": "6", "builtin": False},
             })
+            # load_all_profiles now merges in built-ins too — we should
+            # see 2 (user) + 3 (built-ins) = 5 total.
             loaded = pm.load_all_profiles()
-            self.assertEqual(len(loaded), 2)
+            self.assertEqual(len(loaded), 5)
+            # The user v1 entries were migrated to v2
             self.assertEqual(loaded["Stereo"]["schema_version"], 2)
             self.assertEqual(loaded["MyCustom"]["schema_version"], 2)
             self.assertEqual(loaded["Stereo"]["devices"], [])
+            # The built-ins are present (Gaming, Streaming, Voice Chat Only)
+            self.assertIn("Gaming", loaded)
+            # And they're not polluted into the user file
+            self.assertEqual(pm.is_builtin_name("Gaming"), True)
+            self.assertEqual(pm.is_shadowed_by_user("Gaming"), False)
+            # Save user "Gaming" and verify shadow works
+            pm.save_profile("Gaming", {"devices": [], "routing": []})
+            self.assertEqual(pm.is_shadowed_by_user("Gaming"), True)
+            loaded = pm.load_all_profiles()
+            # Shadowed Gaming is now the user's (empty) version
+            self.assertEqual(loaded["Gaming"]["devices"], [])
+            # Other built-ins still load
+            self.assertIn("Streaming", loaded)
 
 
 class TestDefaultSinkSentinel(unittest.TestCase):

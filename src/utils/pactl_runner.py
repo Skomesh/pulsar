@@ -3,8 +3,7 @@ PulseAudio command execution and parsing utilities.
 """
 
 import subprocess
-import re
-from typing import List, Dict, Any, Tuple, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 class PactlRunner:
@@ -26,11 +25,11 @@ class PactlRunner:
         """
         full_command = ['pactl'] + command
         command_str = ' '.join(full_command)
-        
+
         # Log the command being executed
         if logger:
             logger(f"$ {command_str}")
-        
+
         try:
             result = subprocess.run(
                 full_command,
@@ -39,25 +38,25 @@ class PactlRunner:
                 text=True,
                 check=False
             )
-            
+
             # Log the result
             if logger:
                 if result.returncode == 0:
                     if result.stdout.strip():
                         # Only log output for commands that produce meaningful output
                         if any(cmd in command_str for cmd in ['list', 'info']):
-                            logger(f"Command completed successfully (output truncated for readability)")
+                            logger("Command completed successfully (output truncated for readability)")
                         else:
-                            logger(f"Command completed successfully")
+                            logger("Command completed successfully")
                             if result.stdout.strip():
                                 logger(f"Output: {result.stdout.strip()}")
                     else:
-                        logger(f"Command completed successfully")
+                        logger("Command completed successfully")
                 else:
                     logger(f"Command failed (exit code {result.returncode})")
                     if result.stdout.strip():
                         logger(f"Error: {result.stdout.strip()}")
-            
+
             return result.stdout, result.returncode
         except Exception as e:
             error_msg = str(e)
@@ -79,14 +78,14 @@ class PactlRunner:
         output, return_code = PactlRunner.run_command(['list', 'sinks'], logger)
         if return_code != 0:
             return []
-        
+
         sinks = []
         current_sink = None
         current_section = None
-        
+
         for line in output.splitlines():
             line_stripped = line.strip()
-            
+
             if line.startswith('Sink #'):
                 # Save previous sink and start new one
                 if current_sink:
@@ -94,7 +93,7 @@ class PactlRunner:
                 sink_id = line.split('#')[1].strip()
                 current_sink = {'id': sink_id, 'properties': {}}
                 current_section = None
-                
+
             elif current_sink:
                 if line_stripped.startswith('Properties:'):
                     current_section = 'properties'
@@ -115,11 +114,11 @@ class PactlRunner:
                     key, value = line.split(':', 1)
                     key = key.strip()
                     value = value.strip()
-                    
+
                     # Map to standardized field names
                     field_map = {
                         'State': 'state',
-                        'Name': 'name', 
+                        'Name': 'name',
                         'Description': 'description',
                         'Driver': 'driver',
                         'Sample Specification': 'sample_spec',
@@ -132,13 +131,13 @@ class PactlRunner:
                         'Latency': 'latency',
                         'Flags': 'flags'
                     }
-                    
+
                     field_name = field_map.get(key, key.lower().replace(' ', '_'))
                     current_sink[field_name] = value
-        
+
         if current_sink:
             sinks.append(current_sink)
-            
+
         return sinks
 
     @staticmethod
@@ -155,14 +154,14 @@ class PactlRunner:
         output, return_code = PactlRunner.run_command(['list', 'sources'], logger)
         if return_code != 0:
             return []
-        
+
         sources = []
         current_source = None
         current_section = None
-        
+
         for line in output.splitlines():
             line_stripped = line.strip()
-            
+
             if line.startswith('Source #'):
                 # Save previous source and start new one
                 if current_source:
@@ -170,7 +169,7 @@ class PactlRunner:
                 source_id = line.split('#')[1].strip()
                 current_source = {'id': source_id, 'properties': {}}
                 current_section = None
-                
+
             elif current_source:
                 if line_stripped.startswith('Properties:'):
                     current_section = 'properties'
@@ -191,12 +190,12 @@ class PactlRunner:
                     key, value = line.split(':', 1)
                     key = key.strip()
                     value = value.strip()
-                    
+
                     # Map to standardized field names
                     field_map = {
                         'State': 'state',
                         'Name': 'name',
-                        'Description': 'description', 
+                        'Description': 'description',
                         'Driver': 'driver',
                         'Sample Specification': 'sample_spec',
                         'Channel Map': 'channel_map',
@@ -208,13 +207,13 @@ class PactlRunner:
                         'Latency': 'latency',
                         'Flags': 'flags'
                     }
-                    
+
                     field_name = field_map.get(key, key.lower().replace(' ', '_'))
                     current_source[field_name] = value
-        
+
         if current_source:
             sources.append(current_source)
-            
+
         return sources
 
     @staticmethod
@@ -231,14 +230,14 @@ class PactlRunner:
         output, return_code = PactlRunner.run_command(['list', 'modules'], logger)
         if return_code != 0:
             return []
-        
+
         modules = []
         current_module = None
         current_section = None
-        
+
         for line in output.splitlines():
             line_stripped = line.strip()
-            
+
             if line.startswith('Module #'):
                 # Save previous module and start new one
                 if current_module:
@@ -246,7 +245,7 @@ class PactlRunner:
                 module_id = line.split('#')[1].strip()
                 current_module = {'id': module_id, 'properties': {}}
                 current_section = None
-                
+
             elif current_module:
                 if line_stripped.startswith('Properties:'):
                     current_section = 'properties'
@@ -279,10 +278,10 @@ class PactlRunner:
                 elif line_stripped.startswith('Usage counter: '):
                     current_module['usage_counter'] = line_stripped[15:].strip()
                     current_section = None  # Reset section after usage counter
-        
+
         if current_module:
             modules.append(current_module)
-            
+
         return modules
 
     @staticmethod
@@ -302,8 +301,8 @@ class PactlRunner:
 
     @staticmethod
     def create_duplex_sink(
-        name: str, 
-        description: str, 
+        name: str,
+        description: str,
         channels: int = 2,
         rate: Optional[int] = None,
         format: Optional[str] = None,
@@ -329,47 +328,47 @@ class PactlRunner:
         """
         # Build the command arguments
         cmd_args = [
-            'load-module', 
-            'module-null-sink', 
+            'load-module',
+            'module-null-sink',
             'media.class=Audio/Duplex',
             f'sink_name={name}',
             f'channels={channels}'
         ]
-        
+
         # Add advanced options if specified
         if rate is not None:
             cmd_args.append(f'rate={rate}')
-        
+
         if format is not None:
             cmd_args.append(f'format={format}')
-        
+
         if channel_map is not None:
             cmd_args.append(f'channel_map={channel_map}')
-        
+
         if sink_properties is not None:
             cmd_args.append(f'sink_properties={sink_properties}')
-        
+
         output, return_code = PactlRunner.run_command(cmd_args, logger)
-        
+
         return return_code == 0
 
     @staticmethod
     def unload_all_null_sinks(logger=None) -> Tuple[int, List[str]]:
         """
         Unload all null sink modules.
-        
+
         Args:
             logger: Optional callback function to log command execution
-        
+
         Returns:
             A tuple containing (number_of_modules_unloaded, list_of_errors)
         """
         modules = PactlRunner.list_modules(logger)
         null_sink_modules = [m for m in modules if m.get('name') == 'module-null-sink']
-        
+
         successful = 0
         errors = []
-        
+
         for module in null_sink_modules:
             module_id = module.get('id', '')
             if module_id:
@@ -378,5 +377,5 @@ class PactlRunner:
                     successful += 1
                 else:
                     errors.append(f"Failed to unload module #{module_id}")
-        
-        return successful, errors 
+
+        return successful, errors

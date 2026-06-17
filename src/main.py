@@ -4,15 +4,16 @@ PulseAudio Control GUI (pactl-gui)
 Main application entry point
 """
 
-import tkinter as tk
 import os
 import sys
+import tkinter as tk
 
 # Ensure we can import our modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # Import our UI components
 from ui.main_window import MainWindow
+
 
 def main():
     """Main application entry point."""
@@ -27,10 +28,10 @@ def main():
 
     # Create the main window
     root = tk.Tk()
-    app = MainWindow(root)
-    
+    MainWindow(root)
+
     # Start the main application loop
     root.mainloop()
 
 if __name__ == "__main__":
-    main() 
+    main()

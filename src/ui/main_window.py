@@ -8,7 +8,6 @@ import re
 
 # Importing our utility modules
 import sys
-import tempfile
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from typing import Any, Dict, List, Optional
@@ -18,16 +17,7 @@ from utils.pactl_runner import PactlRunner
 from utils.preset_manager import PresetManager
 from utils.profile_manager import ProfileManager
 from utils.pw_app_capture import (
-    PortalCapture,
-    PortalCaptureError,
-    PwRecordError,
     discover_app_audio_nodes,
-    portal_available_source_types,
-    portal_screencast_version,
-    pw_record_available,
-    start_pw_record,
-    stop_pw_record,
-    supports_app_capture,
 )
 from utils.pw_diagnostics import (
     get_graph_snapshot,
@@ -84,7 +74,7 @@ class MainWindow:
         self.tab_control.add(self.create_tab, text="Create")
         self.tab_control.add(self.manage_tab, text="Manage")
         self.tab_control.add(self.profiles_tab, text="Profiles")
-        self.tab_control.add(self.capture_tab, text="Capture")
+        self.tab_control.add(self.capture_tab, text="App Audio")
         self.tab_control.add(self.hardware_tab, text="Hardware")
         self.tab_control.add(self.diagnostics_tab, text="Diagnostics")
         self.tab_control.add(self.output_tab, text="Output")
@@ -1031,51 +1021,73 @@ class MainWindow:
             messagebox.showerror("Delete Profile", f"Failed to delete '{name}'.")
 
     def setup_capture_tab(self):
-        """Set up the Capture tab for per-app audio capture (Phase 5a).
+        """Set up the App Audio Discovery tab (formerly Phase 5a).
 
-        Two discovery paths:
-        1. Live node discovery — enumerate current Stream/Input/Audio
-           and Stream/Output/Audio nodes (apps currently playing sound).
-           Each shows its PW node ID; the user can capture it to a WAV
-           file via pw-record (works without any portal interaction).
-           This is the recommended path on systems where the portal
-           doesn't support APPLICATION source type.
-        2. Portal flow — open xdg-desktop-portal's "pick an app" dialog.
-           This requires a portal backend that supports APPLICATION
-           source type (KDE, GNOME, wlroots with PipeWire 0.3.40+).
-           The GTK fallback portal does NOT support it; on those
-           systems, the button is disabled and we tell the user why.
+        PURPOSE: Find the PipeWire node ID for any application
+        currently producing audio, so you can paste it into OBS,
+        Discord, EasyEffects, or any other tool that consumes PW
+        audio sources. This is the headline use case — once you
+        have a node ID, you can route app audio anywhere you want
+        in any PipeWire-aware app.
+
+        What it does:
+        - Scans pw-dump for active Stream/Input/Audio and
+          Stream/Output/Audio nodes (apps currently producing audio)
+        - Shows them in a table with PW node ID, app name, stream
+          class, and node name
+        - Lets you copy the node ID or node name to clipboard with
+          one click
+
+        What it does NOT do (intentionally):
+        - Open an app picker dialog (the portal flow was broken on
+          most systems and never returned a usable node ID)
+        - Record to a file (capture-to-file with no follow-up
+          destination is just clutter; if you want to record app
+          audio, use OBS, EasyEffects, or pw-record directly)
+
+        The portal flow and capture-to-file were removed because
+        they didn't do anything the user couldn't do more easily
+        with a dedicated tool. This tab now has one job: tell you
+        the node ID for each running app's audio.
         """
         outer = self._setup_scrollable_tab(self.capture_tab, padding="10")
 
-        # State for any active recording — used to enable "Stop" button.
-        self._active_record_proc = None
-        self._active_record_path = None
-        self._active_record_app = None
+        # Header explanation
+        ttk.Label(
+            outer,
+            text=(
+                "App Audio Discovery — find the PipeWire node ID for each "
+                "app currently producing audio. Copy the node ID and paste "
+                "it into OBS (Application Audio Capture source), Discord, "
+                "EasyEffects, or any other PipeWire-aware tool to route "
+                "that app's audio anywhere you want."
+            ),
+            wraplength=700,
+        ).pack(anchor=tk.W, pady=(0, 10))
 
-        # --- Live node discovery -----------------------------------------
+        # Treeview of active streams
         discover_frame = ttk.LabelFrame(
             outer, text="Currently Active App Audio Streams", padding="10"
         )
         discover_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
 
-        # Treeview: PW ID | App | Class | Node Name
         cols = ("id", "app", "class", "node_name")
         self.capture_tree = ttk.Treeview(
-            discover_frame, columns=cols, show="headings", height=8
+            discover_frame, columns=cols, show="headings", height=10
         )
         self.capture_tree.heading("id", text="PW Node ID")
         self.capture_tree.heading("app", text="Application")
         self.capture_tree.heading("class", text="Stream Class")
         self.capture_tree.heading("node_name", text="Node Name")
         self.capture_tree.column("id", width=100, anchor=tk.W)
-        self.capture_tree.column("app", width=180, anchor=tk.W)
+        self.capture_tree.column("app", width=200, anchor=tk.W)
         self.capture_tree.column("class", width=180, anchor=tk.W)
-        self.capture_tree.column("node_name", width=240, anchor=tk.W)
+        self.capture_tree.column("node_name", width=300, anchor=tk.W)
         self.capture_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         tree_scroll = ttk.Scrollbar(
-            discover_frame, orient=tk.VERTICAL, command=self.capture_tree.yview
+            discover_frame, orient=tk.VERTICAL,
+            command=self.capture_tree.yview,
         )
         tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.capture_tree.configure(yscrollcommand=tree_scroll.set)
@@ -1083,6 +1095,7 @@ class MainWindow:
             "<<TreeviewSelect>>", self._on_capture_tree_select
         )
 
+        # Action buttons
         disc_buttons = ttk.Frame(outer)
         disc_buttons.pack(fill=tk.X, pady=(0, 10))
         ttk.Button(
@@ -1097,135 +1110,32 @@ class MainWindow:
             disc_buttons, text="Copy Node Name",
             command=self._copy_selected_capture_node_name, width=15,
         ).pack(side=tk.LEFT, padx=5)
-        # pw-record is the working path — it's the headline button.
-        self.capture_record_button = ttk.Button(
-            disc_buttons, text="Capture to File...",
-            command=self._on_capture_to_file_clicked, width=18,
-        )
-        self.capture_record_button.pack(side=tk.LEFT, padx=5)
-        if not pw_record_available():
-            self.capture_record_button.config(
-                state="disabled",
-                text="Capture to File... (install pipewire-tools)",
-            )
 
-        # --- Active recording status -------------------------------------
-        rec_status_frame = ttk.LabelFrame(
-            outer, text="Recording", padding="10"
+        # Selected node display
+        selected_frame = ttk.LabelFrame(
+            outer, text="Selected Stream", padding="10"
         )
-        rec_status_frame.pack(fill=tk.X, pady=(0, 10))
-        self.capture_rec_status_var = tk.StringVar(value="No active recording")
-        ttk.Label(
-            rec_status_frame,
-            textvariable=self.capture_rec_status_var,
-        ).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(
-            rec_status_frame, text="Stop Recording",
-            command=self._on_stop_recording_clicked, width=15,
-        ).pack(side=tk.LEFT)
-
-        # --- Selected node display --------------------------------------
-        selected_frame = ttk.LabelFrame(outer, text="Selected", padding="10")
         selected_frame.pack(fill=tk.X, pady=(0, 10))
-
-        self.capture_selected_var = tk.StringVar(value="(no node selected)")
+        self.capture_selected_var = tk.StringVar(value="(no stream selected)")
         ttk.Label(
             selected_frame,
             textvariable=self.capture_selected_var,
             font=("Courier", 10),
         ).pack(anchor=tk.W)
 
-        # --- Portal section (collapsible, since it often doesn't work) --
-        portal_outer = ttk.LabelFrame(
-            outer, text="Advanced: Pick an App via Portal", padding="10"
-        )
-        portal_outer.pack(fill=tk.X, pady=(0, 10))
-
-        ttk.Label(
-            portal_outer,
-            text=(
-                "The xdg-desktop-portal ScreenCast API can show a native "
-                "app-picker dialog and return a PipeWire remote for the "
-                "captured app. This requires a portal backend that supports "
-                "APPLICATION source type (KDE, GNOME, wlroots). The GTK "
-                "fallback portal used on systems without these does NOT "
-                "support app audio — the button below is disabled when that "
-                "is detected.\n\n"
-                "For most users, the 'Capture to File' button above is the "
-                "recommended path — it works on any PipeWire system and "
-                "captures to a WAV file you can use as you wish."
-            ),
-            wraplength=600,
-        ).pack(anchor=tk.W, pady=(0, 5))
-
-        # Portal status banner
-        self.capture_status_var = tk.StringVar(value="Querying portal...")
-        ttk.Label(
-            portal_outer,
-            textvariable=self.capture_status_var,
-            wraplength=600,
-        ).pack(anchor=tk.W)
-        ttk.Button(
-            portal_outer, text="Refresh Status",
-            command=self._refresh_capture_status, width=15,
-        ).pack(anchor=tk.W, pady=(5, 0))
-
-        # Pre-create the portal button — its state is set by
-        # _refresh_capture_status. This is created early so the status
-        # refresh can .config() it.
-        self.capture_app_button = ttk.Button(
-            portal_outer, text="(portal button — see status above)",
-            command=self._on_capture_app_audio_clicked, width=30,
-        )
-        self.capture_app_button.pack(anchor=tk.W, pady=(5, 0))
-
-        # Initial discovery and status
+        # Initial discovery
         self._refresh_capture_tree()
-        self._refresh_capture_status()
-
-    def _refresh_capture_status(self):
-        """Update the portal status banner text."""
-        version = portal_screencast_version()
-        if version is None:
-            self.capture_status_var.set(
-                "Portal not reachable. Install xdg-desktop-portal and a "
-                "backend (e.g. xdg-desktop-portal-gtk)."
-            )
-            self.capture_app_button.config(state="disabled")
-            return
-        types = portal_available_source_types()
-        if types is None:
-            self.capture_status_var.set("Portal reachable but source-types query failed.")
-            self.capture_app_button.config(state="disabled")
-            return
-        bits = []
-        if types & 1:
-            bits.append("monitor")
-        if types & 2:
-            bits.append("window")
-        if types & 4:
-            bits.append("application")
-        if not bits:
-            bits.append("(none)")
-        supports = supports_app_capture()
-        self.capture_status_var.set(
-            f"ScreenCast v{version} — supports: {', '.join(bits)}.  "
-            f"Per-app capture: {'YES' if supports else 'NO'}."
-        )
-        self.capture_app_button.config(
-            state="normal" if supports else "disabled"
-        )
 
     def _refresh_capture_tree(self):
         """Re-scan for current app audio streams and rebuild the tree."""
-        # Clear existing
         for item in self.capture_tree.get_children():
             self.capture_tree.delete(item)
-        # Discover
         try:
             nodes = discover_app_audio_nodes(logger=self.add_output)
         except Exception as e:
-            messagebox.showerror("Capture error", f"Failed to enumerate nodes: {e}")
+            messagebox.showerror(
+                "Discovery error", f"Failed to enumerate nodes: {e}"
+            )
             return
         for n in nodes:
             self.capture_tree.insert(
@@ -1239,17 +1149,17 @@ class MainWindow:
             )
         if not nodes:
             self.capture_selected_var.set(
-                "(no app audio streams running — start playing audio in an app, "
-                "then hit Refresh)"
+                "(no app audio streams running — start playing audio in "
+                "an app, then hit Refresh)"
             )
         self.add_output(
-            f"Capture: discovered {len(nodes)} active app audio stream(s)"
+            f"App Audio Discovery: {len(nodes)} active stream(s)"
         )
 
     def _on_capture_tree_select(self, _event=None):
         sel = self.capture_tree.selection()
         if not sel:
-            self.capture_selected_var.set("(no node selected)")
+            self.capture_selected_var.set("(no stream selected)")
             return
         values = self.capture_tree.item(sel[0])["values"]
         if not values:
@@ -1275,179 +1185,6 @@ class MainWindow:
         name = self.capture_tree.item(sel[0])["values"][3]
         self._copy_to_clipboard(str(name), label=f"Node name {name}")
 
-    def _copy_to_clipboard(self, text: str, label: str = ""):
-        """Copy text to the X11/Wayland clipboard via Tkinter."""
-        try:
-            self.root.clipboard_clear()
-            self.root.clipboard_append(text)
-            # On Wayland, the clipboard needs an update() to actually surface
-            self.root.update()
-        except tk.TclError as e:
-            messagebox.showerror("Copy failed", f"Could not copy to clipboard: {e}")
-            return
-        self.add_output(f"Copied {label or text!r} to clipboard")
-        self.status_var.set(f"Copied to clipboard: {label or text}")
-
-    def _on_capture_to_file_clicked(self):
-        """Record the selected app's audio to a WAV file via pw-record."""
-        sel = self.capture_tree.selection()
-        if not sel:
-            messagebox.showinfo(
-                "Capture to File",
-                "Select an app audio stream from the list first.",
-            )
-            return
-        if self._active_record_proc is not None:
-            messagebox.showwarning(
-                "Capture to File",
-                "A recording is already in progress. Stop it first.",
-            )
-            return
-        values = self.capture_tree.item(sel[0])["values"]
-        if not values:
-            return
-        pw_id, app, cls, name = values
-        # Suggest a default filename like /tmp/pulsar_capture_<app>_<pid>.wav
-        try:
-            pid_part = str(app).split("pid ")[1].rstrip(")")
-        except (IndexError, ValueError):
-            pid_part = "unknown"
-        default_name = f"pulsar_capture_{name}_{pid_part}.wav"
-        out_path = filedialog.asksaveasfilename(
-            title="Save capture to...",
-            defaultextension=".wav",
-            initialfile=default_name,
-            initialdir=tempfile.gettempdir(),
-            filetypes=[("WAV audio", "*.wav"), ("All files", "*.*")],
-        )
-        if not out_path:
-            return  # User cancelled
-        try:
-            proc = start_pw_record(
-                int(pw_id), out_path, sample_rate=48000, channels=2,
-                logger=self.add_output,
-            )
-        except PwRecordError as e:
-            messagebox.showerror("Capture failed", str(e))
-            return
-        self._active_record_proc = proc
-        self._active_record_path = out_path
-        self._active_record_app = str(app)
-        self.capture_rec_status_var.set(
-            f"Recording {app} → {os.path.basename(out_path)} (PID {proc.pid})"
-        )
-        self.status_var.set(
-            "Recording. Click 'Stop Recording' to finish."
-        )
-        self.add_output(
-            f"Capture: started pw-record (PID {proc.pid}) "
-            f"targeting node {pw_id} → {out_path}"
-        )
-
-    def _on_stop_recording_clicked(self):
-        """Stop the active pw-record process and report on the output file."""
-        if self._active_record_proc is None:
-            messagebox.showinfo("Stop Recording", "No active recording.")
-            return
-        proc = self._active_record_proc
-        path = self._active_record_path or ""
-        app = self._active_record_app or "(unknown)"
-        if not path:
-            messagebox.showerror("Stop failed", "No recording path recorded.")
-            return
-        self.capture_rec_status_var.set(f"Stopping {app}...")
-        self.root.update()  # Force the label to repaint
-        try:
-            rc, _out, err = stop_pw_record(proc, timeout=5, logger=self.add_output)
-        except Exception as e:
-            messagebox.showerror("Stop failed", f"Failed to stop recording: {e}")
-            return
-        # Reset state
-        self._active_record_proc = None
-        self._active_record_path = None
-        self._active_record_app = None
-        # Report
-        size = os.path.getsize(path) if os.path.exists(path) else 0
-        duration_hint = ""
-        # WAV files have 48kHz/16-bit/stereo = 192000 bytes/sec
-        if size > 44:
-            secs = (size - 44) / 192000
-            duration_hint = f", ~{secs:.1f} seconds"
-        if err.strip():
-            self.add_output(f"pw-record stderr: {err.strip()}")
-        self.capture_rec_status_var.set(
-            f"No active recording (last: {os.path.basename(path)}, "
-            f"{size} bytes{duration_hint})"
-        )
-        self.status_var.set(
-            f"Recording saved to {path} ({size} bytes{duration_hint})"
-        )
-        self.add_output(
-            f"Capture: stopped. Saved {size} bytes to {path}{duration_hint}. "
-            f"Exit code: {rc}."
-        )
-
-    def _on_capture_app_audio_clicked(self):
-        """Drive the xdg-desktop-portal flow to get a per-app capture node.
-
-        NOTE: This is the "Advanced" path. It requires a portal backend
-        that supports APPLICATION source type (KDE, GNOME, wlroots). The
-        button is disabled otherwise. On most Linux desktops with
-        PipeWire 0.3.40+, this is the path that "just works" — the
-        user gets a native app-picker dialog and the captured node ID.
-
-        For systems where the portal doesn't support APPLICATION, the
-        user is directed to the "Capture to File" button above, which
-        uses pw-record directly and works on any PipeWire system.
-        """
-        if not supports_app_capture():
-            messagebox.showwarning(
-                "Portal not supported",
-                "Your portal doesn't support APPLICATION source type. "
-                "Use the 'Capture to File' button above instead — it works "
-                "on any PipeWire system. If you want the portal flow, "
-                "install xdg-desktop-portal-kde, -gnome, or -wlr.",
-            )
-            return
-        self.add_output("Capture: opening portal picker dialog...")
-        self.status_var.set("Waiting for app selection in portal dialog...")
-        self.capture_app_button.config(state="disabled")
-        try:
-            portal = PortalCapture()
-            portal.create_session()
-            portal.select_sources(multiple=False)
-            start_handle = portal.start()  # Blocks until user clicks Share/Cancel
-            self.add_output(f"Portal: Start returned {start_handle}")
-            # Note: PortalCapture doesn't actually return the captured
-            # node ID — it returns the start request handle. Getting
-            # the actual node ID requires the OpenPipeWireRemote FD,
-            # which is complex across processes. For now, the
-            # "Capture to File" path is the recommended one and this
-            # portal path is the advanced fallback.
-            messagebox.showinfo(
-                "Portal capture",
-                "The portal session was created successfully.\n\n"
-                "For Phase 5a, the MVP returns the session handle. To "
-                "get the actual captured node ID, use the 'Currently "
-                "Active App Audio Streams' tree above after the app "
-                "starts playing audio, or use the node IDs from any "
-                "tool like pw-cli.\n\n"
-                f"Session handle: {start_handle}",
-            )
-            self.status_var.set(
-                "Portal session created. Use the live streams list to get node IDs."
-            )
-        except PortalCaptureError as e:
-            self.add_output(f"Portal error: {e}")
-            messagebox.showerror("Portal error", str(e))
-            self.status_var.set("Portal capture failed")
-        except Exception as e:
-            self.add_output(f"Unexpected portal error: {e}")
-            messagebox.showerror("Unexpected error", f"{type(e).__name__}: {e}")
-            self.status_var.set("Portal capture failed")
-        finally:
-            self.capture_app_button.config(state="normal")
-            self._refresh_capture_status()  # Re-enable if still supported
 
     def setup_hardware_tab(self):
         """Set up the Hardware tab (Phase 5c: card profile management).
@@ -1600,6 +1337,13 @@ class MainWindow:
                 f"priority={p['priority']})"
             )
             self.hardware_profile_listbox.insert(tk.END, label)
+        # Enable the Activate button once profiles are loaded — without
+        # this, the button stays disabled forever (bug — fixed here).
+        self.hardware_activate_button.config(state="normal")
+        # Reset details label so it doesn't show stale info
+        self.hardware_profile_details_var.set(
+            "Select a profile and click Activate Profile to switch."
+        )
         self.add_output(
             f"Hardware: card '{card.get('description')}' has "
             f"{len(card.get('profiles', []))} profile(s); "
@@ -2057,8 +1801,42 @@ class MainWindow:
             self.add_output(f"Created {type_label} device: {name} ({description})")
             self.status_var.set(f"Created {type_label} device: {name}")
             self.refresh_all_views()
+            # For sinks: offer to route to the default output. This is
+            # the common case ("I just created a virtual game sink,
+            # now I want to hear it on my headphones") and removes the
+            # friction of having to manually create a loopback on the
+            # Manage tab.
+            if device_type in ("sink", "both"):
+                self._offer_route_to_default(name)
         else:
             self.add_output(f"Failed to create {type_label} device: {name}")
+
+    def _offer_route_to_default(self, sink_name: str):
+        """After creating a sink, ask the user if they want to route
+        it to the current default output. This is the most common
+        next step ("I want to hear this on my speakers/headphones")
+        and exposing it as a one-click confirmation is much better
+        than expecting the user to find the routing panel."""
+        default = PactlRunner.get_default_sink()
+        if not default:
+            return  # No default sink? Nothing useful to offer.
+        # Don't offer if there's already a loopback from this sink
+        monitor = PactlRunner.monitor_source_for(sink_name)
+        existing = PactlRunner.list_loopbacks()
+        if any(lb.get("source") == monitor for lb in existing):
+            return
+        if messagebox.askyesno(
+            "Route to default output?",
+            f"'{sink_name}' is created. Route it to your default "
+            f"output ('{default}') so you can hear it now?\n\n"
+            f"(You can change routing at any time on the Manage tab.)",
+        ):
+            PactlRunner.create_loopback(sink_name, default,
+                                        logger=self.add_output)
+            self.refresh_all_views()
+            self.add_output(
+                f"Routed '{sink_name}' → '{default}'"
+            )
 
     def create_duplex_sink(self):
         """Backward-compatible alias. New code should call create_device()."""

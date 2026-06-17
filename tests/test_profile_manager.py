@@ -115,10 +115,10 @@ class TestMigration(unittest.TestCase):
             self.assertEqual(loaded["Stereo"]["schema_version"], 2)
             self.assertEqual(loaded["MyCustom"]["schema_version"], 2)
             self.assertEqual(loaded["Stereo"]["devices"], [])
-            # The built-ins are present (Gaming, Streaming, Voice Chat Only)
-            self.assertIn("Gaming", loaded)
-            # And they're not polluted into the user file
-            self.assertEqual(pm.is_builtin_name("Gaming"), True)
+            # The built-ins are present (3 generic profiles now)
+            self.assertIn("Headphones (single output)", loaded)
+            self.assertIn("Per-application routing (4 channels)", loaded)
+            self.assertIn("Stereo split (apps + voice)", loaded)
             self.assertEqual(pm.is_shadowed_by_user("Gaming"), False)
             # Save user "Gaming" and verify shadow works
             pm.save_profile("Gaming", {"devices": [], "routing": []})
@@ -126,9 +126,10 @@ class TestMigration(unittest.TestCase):
             loaded = pm.load_all_profiles()
             # Shadowed Gaming is now the user's (empty) version
             self.assertEqual(loaded["Gaming"]["devices"], [])
-            # Other built-ins still load
-            self.assertIn("Streaming", loaded)
-
+            # Other built-ins still load (now generic names)
+            self.assertIn("Headphones (single output)", loaded)
+            self.assertIn("Per-application routing (4 channels)", loaded)
+            self.assertIn("Stereo split (apps + voice)", loaded)
 
 class TestDefaultSinkSentinel(unittest.TestCase):
     """Validation and substitution of the <AUTO_DEFAULT> sentinel.

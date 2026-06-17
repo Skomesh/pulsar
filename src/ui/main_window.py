@@ -560,7 +560,13 @@ class MainWindow:
         self.latency_custom_entry = ttk.Entry(
             self.advanced_frame, textvariable=self.latency_var, width=10
         )
-        # Update recommended when sample rate changes
+        # Update recommended when sample rate changes. We always:
+        # 1. Recompute the recommended value for the new rate
+        # 2. Update the displayed label if the user is on Auto
+        # 3. Update the combobox's values list (so when the user
+        #    opens the dropdown, the Auto option shows the new value)
+        # 4. Call update_idletasks() to force Tk to refresh the
+        #    combobox's internal cache of the values list.
         def _on_rate_change_recommend(*_):
             try:
                 rate = int(self.rate_var.get())
@@ -571,17 +577,32 @@ class MainWindow:
             )
             # Update the "Auto" label to reflect the new rate
             auto_label = self._latency_auto_label()
-            # If the user is currently on Auto, refresh the displayed label
-            if self.latency_preset_var.get().startswith("Auto"):
+            current = self.latency_preset_var.get()
+            if current.startswith("Auto"):
+                # User is on Auto — update the displayed text to the
+                # new auto label (it now shows the new recommended value
+                # for the new rate).
                 self.latency_preset_var.set(auto_label)
-            else:
-                # Otherwise just update the dropdown's Auto option label
-                # (Tkinter doesn't easily let us change a single value in
-                # a combobox, so we just rebuild the values list)
-                try:
-                    self.latency_combo.config(values=self._latency_preset_labels())
-                except tk.TclError:
-                    pass
+            # Always rebuild the values list so the dropdown menu's
+            # "Auto" entry shows the updated value. Tkinter's Combobox
+            # caches the values list internally, so we have to update
+            # the option list explicitly. Setting values=() first then
+            # setting the new list forces Tk to drop its cache.
+            try:
+                self.latency_combo.config(values=())
+                self.latency_combo.config(values=self._latency_preset_labels())
+                # If the user was on Auto, re-set the displayed value
+                # to the (possibly different) auto label.
+                if current.startswith("Auto"):
+                    self.latency_preset_var.set(auto_label)
+                # Force Tk to process pending events. update_idletasks
+                # handles redraws and any pending option-list updates;
+                # update() also processes user input but is the most
+                # thorough way to ensure the combobox re-renders.
+                self.latency_combo.update_idletasks()
+                self.root.update_idletasks()
+            except tk.TclError:
+                pass
 
         self.rate_var.trace_add("write", _on_rate_change_recommend)
 

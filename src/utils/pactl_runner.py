@@ -2,6 +2,7 @@
 PulseAudio command execution and parsing utilities.
 """
 
+import re
 import subprocess
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -774,4 +775,128 @@ class PactlRunner:
                 _, _, value = line_stripped.partition(":")
                 value = value.strip()
                 return value or None
+        return None
+
+    @staticmethod
+    def get_default_source(logger=None) -> Optional[str]:
+        """Return the name of the system's current default source.
+
+        Mirror of get_default_sink for input devices.
+        """
+        output, return_code = PactlRunner.run_command(['info'], logger)
+        if return_code != 0:
+            return None
+        for line in output.splitlines():
+            line_stripped = line.strip()
+            if line_stripped.startswith("Default Source:"):
+                _, _, value = line_stripped.partition(":")
+                value = value.strip()
+                return value or None
+        return None
+
+    @staticmethod
+    def set_default_sink(sink_name: str, logger=None) -> bool:
+        """Set the system default sink by name. Returns True on success."""
+        _, return_code = PactlRunner.run_command(
+            ['set-default-sink', sink_name], logger
+        )
+        return return_code == 0
+
+    @staticmethod
+    def set_default_source(source_name: str, logger=None) -> bool:
+        """Set the system default source by name. Returns True on success."""
+        _, return_code = PactlRunner.run_command(
+            ['set-default-source', source_name], logger
+        )
+        return return_code == 0
+
+    @staticmethod
+    def _parse_volume_percent(output: str) -> Optional[int]:
+        """Parse a `pactl get-sink-volume` / `get-source-volume` line.
+
+        Format: ``Volume: front-left: 65536 / 100% / 0.00 dB,   front-right: ...``
+        We take the first ``\\d+%`` match.
+
+        Returns:
+            Integer percent 0-100+ (values over 100% are possible), or None
+            if the output doesn't match the expected format.
+        """
+        if not output:
+            return None
+        match = re.search(r"(\d+)\s*%", output)
+        if not match:
+            return None
+        try:
+            return int(match.group(1))
+        except ValueError:
+            return None
+
+    @staticmethod
+    def get_sink_volume(sink_name: str, logger=None) -> Optional[int]:
+        """Return the volume of a sink as a percent (0-100+, can be over 100).
+
+        Returns None if pactl fails or the sink doesn't exist.
+        """
+        output, return_code = PactlRunner.run_command(
+            ['get-sink-volume', sink_name], logger
+        )
+        if return_code != 0:
+            return None
+        return PactlRunner._parse_volume_percent(output)
+
+    @staticmethod
+    def get_source_volume(source_name: str, logger=None) -> Optional[int]:
+        """Return the volume of a source as a percent (0-100+)."""
+        output, return_code = PactlRunner.run_command(
+            ['get-source-volume', source_name], logger
+        )
+        if return_code != 0:
+            return None
+        return PactlRunner._parse_volume_percent(output)
+
+    @staticmethod
+    def set_sink_volume(sink_name: str, percent: int, logger=None) -> bool:
+        """Set the volume of a sink by percent (0-150 typical, can be higher).
+
+        Returns True on success. pactl accepts values like '50%', '0.5', or
+        linear '32768'. We always send the percent form for readability.
+        """
+        clamped = max(0, int(percent))
+        _, return_code = PactlRunner.run_command(
+            ['set-sink-volume', sink_name, f"{clamped}%"], logger
+        )
+        return return_code == 0
+
+    @staticmethod
+    def set_source_volume(source_name: str, percent: int, logger=None) -> bool:
+        """Set the volume of a source by percent. Returns True on success."""
+        clamped = max(0, int(percent))
+        _, return_code = PactlRunner.run_command(
+            ['set-source-volume', source_name, f"{clamped}%"], logger
+        )
+        return return_code == 0
+
+    @staticmethod
+    def set_sink_mute(sink_name: str, muted: bool, logger=None) -> bool:
+        """Mute or unmute a sink. Returns True on success."""
+        toggle = "1" if muted else "0"
+        _, return_code = PactlRunner.run_command(
+            ['set-sink-mute', sink_name, toggle], logger
+        )
+        return return_code == 0
+
+    @staticmethod
+    def get_sink_mute(sink_name: str, logger=None) -> Optional[bool]:
+        """Return True/False if the sink is muted, or None on error."""
+        output, return_code = PactlRunner.run_command(
+            ['get-sink-mute', sink_name], logger
+        )
+        if return_code != 0:
+            return None
+        # Format: "Mute: yes" or "Mute: no"
+        line = output.strip().lower()
+        if line.startswith("mute: yes"):
+            return True
+        if line.startswith("mute: no"):
+            return False
         return None

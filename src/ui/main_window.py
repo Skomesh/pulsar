@@ -10,6 +10,7 @@ import re
 import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+from typing import Optional
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.pactl_runner import PactlRunner
@@ -577,6 +578,17 @@ class MainWindow:
         self.stop_route_button.grid(row=1, column=3, padx=5, pady=2)
 
         self.routing_frame.columnconfigure(1, weight=1)
+
+        # Device controls — per-device volume slider, mute, set-as-default.
+        # Lets the user adjust the selected virtual sink's volume without
+        # opening pavucontrol. This is the Phase 4 polish item that makes
+        # Pulsar feel like a tool: one place to control your routing
+        # topology AND its playback levels.
+        self.device_controls_frame = ttk.LabelFrame(
+            frame, text="Device Controls"
+        )
+        self.device_controls_frame.pack(fill=tk.X, padx=10, pady=5)
+        self._build_device_controls(self.device_controls_frame)
 
         # Details frame with scrollable text widget and toggle
         details_frame = ttk.LabelFrame(frame, text="Details")
@@ -1521,6 +1533,7 @@ class MainWindow:
             self.update_details_display("Select an item to see details")
             self.unload_button.config(state="disabled")
             self.update_routing_panel(None)
+            self.update_device_controls_panel(None)
             return
 
         # Get the selected item
@@ -1531,6 +1544,7 @@ class MainWindow:
             self.update_details_display("Select an item to see details")
             self.unload_button.config(state="disabled")
             self.update_routing_panel(None)
+            self.update_device_controls_panel(None)
             return
 
         entity_id, entity_type, entity_name = values
@@ -1549,6 +1563,16 @@ class MainWindow:
             self.update_routing_panel(entity_name)
         else:
             self.update_routing_panel(None)
+
+        # Update device controls panel — works for both sinks and sources
+        # so the user can adjust a null-sink's playback volume OR a
+        # null-source's capture volume from one place.
+        if entity_type in ("sink", "source"):
+            self.update_device_controls_panel(
+                entity_name, is_source=(entity_type == "source")
+            )
+        else:
+            self.update_device_controls_panel(None)
 
         self.update_details_display(details)
 
@@ -1618,6 +1642,194 @@ class MainWindow:
             )
             self.route_button.config(state="normal")
             self.stop_route_button.config(state="disabled")
+
+    # ------------------------------------------------------------------
+    # Device controls (Phase 4: volume + mute + set-as-default)
+    # ------------------------------------------------------------------
+
+    def _build_device_controls(self, parent):
+        """Build the per-device volume / mute / set-as-default row.
+
+        This row is greyed out until a virtual sink is selected in the
+        tree. It is independent of the Routing panel: you can adjust
+        volume without re-routing, and re-route without touching volume.
+        """
+        self.device_controls_target_var = tk.StringVar(
+            value="(no device selected)"
+        )
+        ttk.Label(
+            parent,
+            textvariable=self.device_controls_target_var,
+            font=("", 9, "italic"),
+        ).grid(row=0, column=0, columnspan=4, sticky=tk.W, padx=5, pady=(5, 2))
+
+        # Volume slider + percent label
+        ttk.Label(parent, text="Volume:").grid(
+            row=1, column=0, sticky=tk.W, padx=5, pady=2
+        )
+        # We use an IntVar for easy .get(); sliders in ttk are ttk.Scale.
+        # Range 0-150 (pactl allows amplification above 100%).
+        self.device_volume_var = tk.IntVar(value=100)
+        self.device_volume_scale = ttk.Scale(
+            parent,
+            from_=0,
+            to=150,
+            orient=tk.HORIZONTAL,
+            variable=self.device_volume_var,
+            command=self._on_volume_scale_change,
+            state="disabled",
+        )
+        self.device_volume_scale.grid(
+            row=1, column=1, sticky=tk.EW, padx=5, pady=2
+        )
+        self.device_volume_label = ttk.Label(
+            parent, text="—", width=6
+        )
+        self.device_volume_label.grid(row=1, column=2, padx=5, pady=2)
+
+        # Mute checkbox
+        self.device_mute_var = tk.BooleanVar(value=False)
+        self.device_mute_check = ttk.Checkbutton(
+            parent,
+            text="Mute",
+            variable=self.device_mute_var,
+            command=self._on_mute_check_change,
+            state="disabled",
+        )
+        self.device_mute_check.grid(row=1, column=3, padx=5, pady=2)
+
+        # Set as default + Reset
+        self.set_default_button = ttk.Button(
+            parent,
+            text="Set as Default",
+            command=self._on_set_default_clicked,
+            state="disabled",
+        )
+        self.set_default_button.grid(row=2, column=0, padx=5, pady=(2, 5), sticky=tk.W)
+
+        ttk.Button(
+            parent,
+            text="Refresh",
+            command=self._on_device_controls_refresh,
+            state="disabled",
+            width=10,
+        ).grid(row=2, column=1, padx=5, pady=(2, 5), sticky=tk.W)
+
+        # Stretch the slider column
+        parent.columnconfigure(1, weight=1)
+
+        # State: which sink are we controlling? Set in update_device_controls_panel
+        self._device_controls_sink_name: Optional[str] = None  # type: ignore[name-defined]
+        self._device_controls_is_source = False
+
+    def update_device_controls_panel(
+        self, entity_name: Optional[str] = None, is_source: bool = False
+    ):
+        """Populate the device controls panel for a selected sink or source.
+
+        Pass entity_name=None to reset the panel to its disabled state.
+        """
+        if not entity_name:
+            self._device_controls_sink_name = None
+            self.device_controls_target_var.set("(no device selected)")
+            self.device_volume_scale.config(state="disabled")
+            self.device_mute_check.config(state="disabled")
+            self.set_default_button.config(state="disabled")
+            self.device_volume_label.config(text="—")
+            return
+
+        self._device_controls_sink_name = entity_name
+        self._device_controls_is_source = is_source
+        self.device_controls_target_var.set(
+            f"{entity_name}  ({'source' if is_source else 'sink'})"
+        )
+
+        # Read current volume from pactl and snap the slider to it.
+        # The Scale's command fires on programmatic updates, so we
+        # temporarily set a flag to ignore the change (otherwise the
+        # user sees a flicker as pactl re-sets the value).
+        self._device_controls_loading = True
+        try:
+            if is_source:
+                vol = PactlRunner.get_source_volume(entity_name)
+            else:
+                vol = PactlRunner.get_sink_volume(entity_name)
+            if vol is not None:
+                self.device_volume_var.set(min(vol, 150))
+                self.device_volume_label.config(text=f"{vol}%")
+            else:
+                self.device_volume_var.set(100)
+                self.device_volume_label.config(text="?")
+
+            muted = PactlRunner.get_sink_mute(entity_name)
+            self.device_mute_var.set(bool(muted) if muted is not None else False)
+        finally:
+            self._device_controls_loading = False
+
+        self.device_volume_scale.config(state="normal")
+        self.device_mute_check.config(state="normal")
+        # "Set as Default" only makes sense for sinks
+        if is_source:
+            self.set_default_button.config(state="disabled")
+        else:
+            self.set_default_button.config(state="normal")
+
+    def _on_volume_scale_change(self, _value):
+        """Slider drag — set the sink/source volume live."""
+        if getattr(self, "_device_controls_loading", False):
+            return
+        name = self._device_controls_sink_name
+        if not name:
+            return
+        try:
+            pct = int(self.device_volume_var.get())
+        except (tk.TclError, ValueError):
+            return
+        # Update the percent label
+        self.device_volume_label.config(text=f"{pct}%")
+        if self._device_controls_is_source:
+            ok = PactlRunner.set_source_volume(name, pct)
+        else:
+            ok = PactlRunner.set_sink_volume(name, pct)
+        if not ok:
+            self.add_output(f"Failed to set volume for {name}")
+
+    def _on_mute_check_change(self):
+        """Mute toggle."""
+        if getattr(self, "_device_controls_loading", False):
+            return
+        name = self._device_controls_sink_name
+        if not name:
+            return
+        muted = self.device_mute_var.get()
+        # Only sinks support get/set-sink-mute; sources use a similar API
+        # (set-source-mute) but we keep the current implementation simple.
+        if self._device_controls_is_source:
+            self.add_output("Mute toggle for sources is not yet supported")
+            return
+        if not PactlRunner.set_sink_mute(name, muted):
+            self.add_output(f"Failed to set mute for {name}")
+
+    def _on_set_default_clicked(self):
+        """Make the selected sink the system default sink."""
+        name = self._device_controls_sink_name
+        if not name or self._device_controls_is_source:
+            return
+        if not PactlRunner.set_default_sink(name):
+            messagebox.showerror("Set Default", f"Failed to set {name} as default sink")
+            return
+        self.add_output(f"Set '{name}' as system default sink")
+        self.status_var.set(f"Default sink: {name}")
+        self.refresh_all_views()
+
+    def _on_device_controls_refresh(self):
+        """Re-read the current device's volume from pactl."""
+        if not self._device_controls_sink_name:
+            return
+        self.update_device_controls_panel(
+            self._device_controls_sink_name,
+            is_source=self._device_controls_is_source,
+        )
 
     def apply_routing(self):
         """Create (or replace) a loopback from the selected sink to the chosen output."""

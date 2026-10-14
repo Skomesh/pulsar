@@ -49,16 +49,32 @@ dev = [
 [project.scripts]
 pulsar = "main:main"
 
+[project.gui-scripts]
+pulsar-gui = "main:main"
+
 [project.urls]
-Homepage = "https://github.com/Skomesh/pulsar"
-Issues = "https://github.com/Skomesh/pulsar/issues"
-Source = "https://github.com/Skomesh/pulsar"
+Homepage = "https://github.com/skomesh/pulsar"
+Issues = "https://github.com/skomesh/pulsar/issues"
+Source = "https://github.com/skomesh/pulsar"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+include-package-data = true
+# py-modules is required in addition to packages: main.py is the module the
+# `pulsar` console script points at, and packages.find only discovers
+# packages (directories with __init__.py). Without this the installed script
+# dies with "ModuleNotFoundError: No module named 'main'".
+py-modules = ["main"]
+
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# The starter profiles live in presets/ at the repo root, but the packages
+# are found under src/. Without this they are excluded from the wheel and the
+# built-in profile list silently comes up empty on every real install.
+[tool.setuptools.package-data]
+"*" = ["presets/*.json"]
 
 [tool.ruff]
 line-length = 100

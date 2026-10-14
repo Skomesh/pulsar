@@ -39,32 +39,49 @@ def gdbus_available() -> bool:
 
 
 class TestPortalHealthChecks(unittest.TestCase):
-    """gdbus subprocess wrapper, with subprocess mocked."""
+    """gdbus subprocess wrapper, with subprocess mocked.
+
+    Every test here must mock ``portal_available`` (i.e. ``shutil.which``) as
+    well as ``subprocess.check_output``. The production code returns early
+    when ``portal_available()`` is False, so mocking only the subprocess call
+    makes these tests depend on gdbus being installed on the test machine --
+    which it is not on a stock GitHub runner, and which turned CI red for
+    reasons unrelated to the code under test.
+    """
 
     def test_portal_available(self):
         # The function is just shutil.which('gdbus')
         self.assertIsInstance(portal_available(), bool)
 
+    @mock.patch("utils.pw_app_capture.portal_available", return_value=True)
     @mock.patch("utils.pw_app_capture.subprocess.check_output")
-    def test_screencast_version_parses_uint32(self, mock_run):
+    def test_screencast_version_parses_uint32(self, mock_run, mock_avail):
         mock_run.return_value = b"(<uint32 5>,)"
         self.assertEqual(portal_screencast_version(), 5)
 
+    @mock.patch("utils.pw_app_capture.portal_available", return_value=True)
     @mock.patch("utils.pw_app_capture.subprocess.check_output")
-    def test_screencast_version_unreachable_returns_none(self, mock_run):
+    def test_screencast_version_unreachable_returns_none(self, mock_run, mock_avail):
         import subprocess
         mock_run.side_effect = subprocess.CalledProcessError(1, "gdbus")
         self.assertIsNone(portal_screencast_version())
 
+    @mock.patch("utils.pw_app_capture.portal_available", return_value=True)
     @mock.patch("utils.pw_app_capture.subprocess.check_output")
-    def test_available_source_types_parses(self, mock_run):
+    def test_available_source_types_parses(self, mock_run, mock_avail):
         mock_run.return_value = b"(<uint32 7>,)"
         self.assertEqual(portal_available_source_types(), 7)
 
+    @mock.patch("utils.pw_app_capture.portal_available", return_value=True)
     @mock.patch("utils.pw_app_capture.subprocess.check_output")
-    def test_available_source_types_unreachable_returns_none(self, mock_run):
+    def test_available_source_types_unreachable_returns_none(self, mock_run, mock_avail):
         import subprocess
         mock_run.side_effect = subprocess.TimeoutExpired("gdbus", 5)
+        self.assertIsNone(portal_available_source_types())
+
+    @mock.patch("utils.pw_app_capture.portal_available", return_value=False)
+    def test_available_source_types_returns_none_without_gdbus(self, mock_avail):
+        """The availability gate must short-circuit before any subprocess call."""
         self.assertIsNone(portal_available_source_types())
 
     @mock.patch(
@@ -113,7 +130,21 @@ class TestObjectPathParser(unittest.TestCase):
 
 
 class TestPortalCapture(unittest.TestCase):
-    """PortalCapture drives the gdbus subprocess. Mock subprocess to test."""
+    """PortalCapture drives the gdbus subprocess. Mock subprocess to test.
+
+    ``portal_available()`` is patched True for the whole class: every code
+    path under test talks to gdbus, and without this the tests silently
+    depend on gdbus being installed on the machine running them (it is not on
+    a stock GitHub runner, which made CI fail for reasons unrelated to the
+    behaviour under test).
+    """
+
+    def setUp(self):
+        patcher = mock.patch(
+            "utils.pw_app_capture.portal_available", return_value=True
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     @mock.patch("utils.pw_app_capture.subprocess.check_output")
     def test_create_session_returns_handle(self, mock_run):

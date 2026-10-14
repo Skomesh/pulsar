@@ -13,6 +13,7 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Any, Dict, List, Optional
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config.paths import user_presets_dir
 from utils.pactl_runner import PactlRunner
 from utils.preset_manager import PresetManager
 from utils.profile_manager import ProfileManager
@@ -3830,12 +3831,15 @@ class MainWindow:
 
     def save_preset(self):
         """Save the current configuration as a preset."""
-        # Create presets directory if it doesn't exist
-        os.makedirs("presets", exist_ok=True)
+        # Default into the per-user presets dir rather than a relative
+        # "presets" in the cwd: launching from a read-only or unrelated
+        # directory made the save fail or land somewhere unreachable.
+        presets_dir = user_presets_dir()
+        os.makedirs(presets_dir, exist_ok=True)
 
         # Ask for preset name
         filename = filedialog.asksaveasfilename(
-            initialdir="presets",
+            initialdir=presets_dir,
             title="Save Preset",
             filetypes=(("JSON files", "*.json"), ("All files", "*.*")),
             defaultextension=".json"

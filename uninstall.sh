@@ -31,15 +31,43 @@ if [ ! -d "$APP_DIR" ] && [ ! -f "$BIN_DIR/pulsar" ] && [ ! -f "$DESKTOP_DIR/pul
 fi
 
 # Remove application directory
+#
+# The user's saved audio profiles live at $APP_DIR/presets/user_presets.json
+# (src/config/paths.py resolves the user presets dir inside the app dir), so a
+# blanket `rm -rf "$APP_DIR"` destroyed irreplaceable routing setups. Stash the
+# profiles first, wipe the app, then restore them to a directory that is NOT
+# inside the app dir.
+PRESETS_REL="presets"
+USER_PRESETS="$APP_DIR/$PRESETS_REL/user_presets.json"
+PRESETS_KEEP="$HOME/.local/share/pulsar-user-profiles"
+
 if [ -d "$APP_DIR" ]; then
     echo -e "${YELLOW}Removing application files from $APP_DIR...${NC}"
+    if [ -d "$APP_DIR/$PRESETS_REL" ]; then
+        echo -e "${YELLOW}Saving your audio profiles before removal...${NC}"
+        mkdir -p "$PRESETS_KEEP"
+        # Copy the CONTENTS, not the directory itself. `cp -r dir dest/` creates
+        # dest/dir/, which then doesn't match the flat user_presets.json path
+        # the restore step below looks for -- profiles would be saved and then
+        # silently not restored.
+        cp -r "$APP_DIR/$PRESETS_REL/." "$PRESETS_KEEP/"
+        echo -e "${GREEN}✓ Profiles preserved in $PRESETS_KEEP${NC}"
+    fi
     rm -rf "$APP_DIR"
     echo -e "${GREEN}✓ Application files removed${NC}"
 else
     echo -e "${YELLOW}Application directory not found, skipping...${NC}"
 fi
 
-# Remove symlink from bin directory
+# Put the preserved profiles back where the app will look for them on next run.
+if [ -f "$PRESETS_KEEP/user_presets.json" ]; then
+    echo -e "${YELLOW}Restoring your audio profiles...${NC}"
+    mkdir -p "$(dirname "$USER_PRESETS")"
+    cp "$PRESETS_KEEP/user_presets.json" "$USER_PRESETS"
+    echo -e "${GREEN}✓ Profiles restored to $PRESETS_REL${NC}"
+fi
+
+# Remove symlinks from bin directory
 if [ -L "$BIN_DIR/pulsar" ] || [ -f "$BIN_DIR/pulsar" ]; then
     echo -e "${YELLOW}Removing symlink from $BIN_DIR...${NC}"
     rm -f "$BIN_DIR/pulsar"
@@ -47,6 +75,10 @@ if [ -L "$BIN_DIR/pulsar" ] || [ -f "$BIN_DIR/pulsar" ]; then
 else
     echo -e "${YELLOW}Command-line launcher not found, skipping...${NC}"
 fi
+
+# The uninstaller symlink was added alongside the launcher; clean it up too,
+# otherwise uninstalling leaves a dangling $BIN_DIR/uninstall.sh.
+rm -f "$BIN_DIR/uninstall.sh"
 
 # Remove desktop file
 if [ -f "$DESKTOP_DIR/pulsar.desktop" ]; then

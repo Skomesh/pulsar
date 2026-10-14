@@ -65,6 +65,15 @@ DESKTOP_DIR="$HOME/.local/share/applications"
 BIN_DIR="$HOME/.local/bin"
 ICON_DIR="$HOME/.local/share/icons/hicolor"
 
+# Resolve the script's own directory, not the caller's cwd.
+#
+# The copy below used to be `cp -r ./* "$APP_DIR/"`, which globs the INVOKER's
+# working directory. Running `bash /path/to/install.sh` from an unrelated
+# directory installed that directory's contents instead of Pulsar's -- and
+# `chmod +x "$APP_DIR/pulsar"` then aborted the install. Anchoring to the
+# script location makes `bash ~/src/pulsar/install.sh` work from anywhere.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Create directories if they don't exist
 echo -e "${YELLOW}Creating installation directories...${NC}"
 mkdir -p "$APP_DIR"
@@ -75,12 +84,41 @@ mkdir -p "$ICON_DIR/64x64/apps"
 mkdir -p "$ICON_DIR/128x128/apps"
 mkdir -p "$ICON_DIR/scalable/apps"
 
+# Preserve user data across reinstalls.
+#
+# The app resolves its user presets dir to
+# $HOME/.local/share/pulsar/presets (see src/config/paths.py), which lives
+# INSIDE APP_DIR. This script then copied the repo's presets/user_presets.json
+# straight over that file, so every upgrade silently replaced the user's saved
+# audio routing with the repo's sample entries, and `uninstall.sh`'s
+# `rm -rf "$APP_DIR"` deleted them outright. Back the file up before
+# overwriting, and restore it afterwards.
+USER_PRESETS="$APP_DIR/presets/user_presets.json"
+PRESETS_BACKUP=""
+if [ -f "$USER_PRESETS" ]; then
+    PRESETS_BACKUP="$(mktemp)"
+    cp "$USER_PRESETS" "$PRESETS_BACKUP"
+    echo -e "${YELLOW}Preserved your saved profiles (will be restored after install)${NC}"
+fi
+
 # Copy application files
 echo -e "${YELLOW}Copying application files to $APP_DIR...${NC}"
-cp -r ./* "$APP_DIR/"
+# Prune the worktree noise that used to get installed alongside the app:
+# build artifacts, caches, VCS metadata, and coverage data.
+rm -rf "$APP_DIR/build" "$APP_DIR/dist" "$APP_DIR/.git" "$APP_DIR/.pytest_cache"
+cp -r "$SCRIPT_DIR"/* "$APP_DIR/"
+
+# Restore the user's own profiles over the freshly copied defaults.
+if [ -n "$PRESETS_BACKUP" ]; then
+    mkdir -p "$(dirname "$USER_PRESETS")"
+    cp "$PRESETS_BACKUP" "$USER_PRESETS"
+    rm -f "$PRESETS_BACKUP"
+fi
 
 # Remove installation scripts from the installed location (they're not needed there)
-rm -f "$APP_DIR/install.sh" "$APP_DIR/uninstall.sh" "$APP_DIR/commit-to-install.sh"
+# uninstall.sh is deliberately KEPT: the completion message points users at it.
+# Deleting it here meant the documented uninstall command did not exist.
+rm -f "$APP_DIR/install.sh" "$APP_DIR/commit-to-install.sh"
 
 # Make the launcher script executable
 chmod +x "$APP_DIR/pulsar"
@@ -88,9 +126,24 @@ chmod +x "$APP_DIR/pulsar"
 # Create symlink in bin directory
 echo -e "${YELLOW}Creating symbolic link in $BIN_DIR...${NC}"
 ln -sf "$APP_DIR/pulsar" "$BIN_DIR/pulsar"
+# Symlink the uninstaller too. The completion message tells users to run
+# $BIN_DIR/uninstall.sh, and advertising a path that was never created is
+# exactly the bug this replaces (it previously pointed at $APP_DIR/uninstall.sh
+# after deleting that file).
+ln -sf "$APP_DIR/uninstall.sh" "$BIN_DIR/uninstall.sh"
 
 # Install desktop file with correct paths
 echo -e "${YELLOW}Installing desktop file to $DESKTOP_DIR...${NC}"
+# Escape the Exec path per the desktop-entry spec: a value containing spaces
+# must be quoted, otherwise a $HOME like "/home/John Doe" makes the launcher
+# tokenize as "/home/John" plus an argument. It works fine from a terminal and
+# fails only from the desktop menu, which is where it matters.
+EXEC_PATH="$BIN_DIR/pulsar"
+case "$EXEC_PATH" in
+    *[[:space:]]*) ESCAPED_EXEC="\"$EXEC_PATH\"" ;;
+    *)             ESCAPED_EXEC="$EXEC_PATH" ;;
+esac
+
 cat > "$DESKTOP_DIR/pulsar.desktop" << EOL
 [Desktop Entry]
 Version=1.0
@@ -98,7 +151,7 @@ Type=Application
 Name=Pulsar
 GenericName=Audio Control
 Comment=Graphical audio routing manager
-Exec=$BIN_DIR/pulsar
+Exec=$ESCAPED_EXEC
 Icon=audio-card
 Terminal=false
 Categories=AudioVideo;Audio;Settings;
@@ -146,4 +199,6 @@ echo -e "${YELLOW}Note: If the application doesn't appear in your menu immediate
 echo "1. Log out and log back in to your desktop session"
 echo "2. Or restart your desktop environment"
 echo ""
-echo -e "${BLUE}To uninstall, run: $APP_DIR/uninstall.sh${NC}" 
+# uninstall.sh IS kept in $APP_DIR. The copy step above used to delete it
+# alongside install.sh and then point the user at the path it had just removed.
+echo -e "${BLUE}To uninstall, run: $BIN_DIR/uninstall.sh${NC}" 

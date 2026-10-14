@@ -87,3 +87,62 @@ jobs:
         # IS present it MUST be valid JSON.
         if: hashFiles('presets/user_presets.json') != ''
         run: python3 -c "import json; json.load(open('presets/user_presets.json'))"
+
+  package:
+    name: package smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Guards a silent regression: the built-in starter profiles live outside
+      # src/ and were dropped from the wheel, so they vanished from every real
+      # install with no error. The same packaging config omitted main.py,
+      # leaving the installed `pulsar` script dead on arrival. Neither shows up
+      # in the unit tests -- they import from the source tree.
+      - name: Build wheel
+        run: |
+          python3 -m pip install --upgrade build
+          python3 -m build --wheel --outdir dist/
+
+      - name: Verify wheel contents
+        run: |
+          python3 - <<'PY'
+          import glob, sys, zipfile
+          wheels = glob.glob('dist/*.whl')
+          if not wheels:
+              sys.exit('no wheel produced')
+          names = zipfile.ZipFile(wheels[-1]).namelist()
+          missing = []
+          if 'main.py' not in names:
+              missing.append('main.py (console script entry point)')
+          if not any('presets/builtin_profiles.json' in n for n in names):
+              missing.append('builtin_profiles.json (starter profiles)')
+          if missing:
+              sys.exit('wheel is missing: ' + ', '.join(missing))
+          print('wheel OK:', wheels[-1])
+          PY
+
+      - name: Install wheel and load built-in profiles
+        # The real end state: from a clean venv, outside the source tree,
+        # resolve the bundled starter profiles. Uses a heredoc rather than
+        # `python -c "..."` because the assertions need quotes inside the
+        # snippet and the nesting gets fragile fast.
+        run: |
+          python3 -m venv /tmp/pkgvenv
+          /tmp/pkgvenv/bin/python -m pip install --upgrade pip
+          /tmp/pkgvenv/bin/python -m pip install dist/*.whl
+          cd "$RUNNER_TEMP"
+          PULSAR_PRESETS_DIR="$RUNNER_TEMP/presets" /tmp/pkgvenv/bin/python - <<'PY'
+          from utils.profile_manager import ProfileManager
+          names = ProfileManager().load_all_profiles()
+          assert names, 'no built-in profiles resolved from the installed wheel'
+          print('resolved', len(names), 'built-in profiles')
+          PY

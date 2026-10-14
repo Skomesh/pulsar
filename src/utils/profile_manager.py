@@ -58,6 +58,12 @@ import shlex
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from config.paths import (
+    USER_PRESETS_FILENAME,
+    builtin_presets_path,
+    legacy_user_presets_paths,
+    user_presets_dir,
+)
 from utils.pactl_runner import PactlRunner
 
 CURRENT_SCHEMA_VERSION = 2
@@ -92,10 +98,53 @@ class ProfileManager:
     top-level keys. v1 entries are auto-migrated to empty v2 profiles on load.
     """
 
-    def __init__(self, presets_dir: str = "presets"):
-        self.presets_dir = presets_dir
-        self.presets_file = os.path.join(presets_dir, "user_presets.json")
+    def __init__(self, presets_dir: Optional[str] = None):
+        # None means "use the per-user XDG location"; tests pass an explicit
+        # temp dir. The old default was the relative string "presets", which
+        # resolved against the cwd and lost profiles depending on where the
+        # app was launched from.
+        self.presets_dir = presets_dir or user_presets_dir()
+        self.presets_file = os.path.join(
+            self.presets_dir, USER_PRESETS_FILENAME
+        )
         self._ensure_presets_dir()
+        self.last_migration_source: Optional[str] = None
+        self._migrate_legacy_presets()
+
+    # ------------------------------------------------------------------
+    # Legacy location migration
+    # ------------------------------------------------------------------
+
+    def _migrate_legacy_presets(self) -> None:
+        """Adopt user presets saved at the old cwd-relative location.
+
+        Profiles used to be written to ``presets/user_presets.json`` relative
+        to whatever directory the app was launched from. Moving them to an
+        XDG location would otherwise silently orphan a user's saved routing:
+        the file is still on disk, but nothing reads it any more.
+
+        Only runs when the new location has no file of its own, and never
+        overwrites one that does. The original is left in place -- copying
+        would make an upgrade irreversible if the migration were wrong, and
+        this data is worth being conservative with.
+        """
+        if os.path.exists(self.presets_file):
+            # Already migrated, or the user genuinely has nothing yet. Either
+            # way, existing data wins.
+            return
+        for legacy in legacy_user_presets_paths():
+            if not os.path.isfile(legacy):
+                continue
+            try:
+                with open(legacy) as f:
+                    data = json.load(f)
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(data, dict) or not data:
+                continue
+            if self._save_raw(data):
+                self.last_migration_source = str(legacy)
+            return
 
     # ------------------------------------------------------------------
     # Filesystem helpers
@@ -160,26 +209,21 @@ class ProfileManager:
         }
 
     def _load_builtin(self) -> Dict[str, Any]:
-        """Load the bundled builtin_profiles.json from the package's presets/ dir.
+        """Load the bundled builtin_profiles.json that ships with the app.
 
-        Returns {} if the file doesn't exist (e.g. dev install) or fails to parse.
-        Built-in profiles are always available and can be overridden by user
-        profiles of the same name.
+        Returns {} if the file can't be found (e.g. a broken install) or
+        fails to parse -- a missing built-in layer degrades the UI to
+        user-defined profiles only, it does not break startup.
+
+        Resolution goes through ``config.paths.builtin_presets_path()``,
+        which finds the file in a wheel/Flatpak install as well as a source
+        checkout. The previous implementation walked up from ``__file__``
+        assuming a source tree, so built-in profiles silently disappeared
+        under any real install.
         """
-        # Built-in profiles live in <project_root>/presets/, not in the user's
-        # presets dir, so they survive across installs. The project's presets/
-        # is at the project root, two levels up from this file
-        # (src/utils/profile_manager.py -> src/utils -> src -> root).
-        builtin_path = os.path.join(
-            os.path.dirname(
-                os.path.dirname(
-                    os.path.dirname(os.path.abspath(__file__))
-                )
-            ),
-            "presets",
-            "builtin_profiles.json",
-        )
-        if not os.path.exists(builtin_path):
+        try:
+            builtin_path = builtin_presets_path()
+        except FileNotFoundError:
             return {}
         try:
             with open(builtin_path) as f:

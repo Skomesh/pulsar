@@ -8,19 +8,26 @@ import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from config.paths import USER_PRESETS_FILENAME, user_presets_dir
+
 
 class PresetManager:
     """Manages custom audio presets for the pactl-gui application."""
 
-    def __init__(self, presets_dir: str = "presets"):
+    def __init__(self, presets_dir: Optional[str] = None):
         """
         Initialize the preset manager.
 
         Args:
-            presets_dir: Directory to store preset files
+            presets_dir: Directory to store preset files. Defaults to the
+                per-user XDG data location; passing a relative path is
+                supported but resolves against the current working directory,
+                which is rarely what callers want.
         """
-        self.presets_dir = presets_dir
-        self.presets_file = os.path.join(presets_dir, "user_presets.json")
+        self.presets_dir = presets_dir or user_presets_dir()
+        self.presets_file = os.path.join(
+            self.presets_dir, USER_PRESETS_FILENAME
+        )
         self._ensure_presets_dir()
 
         # Built-in presets that cannot be deleted

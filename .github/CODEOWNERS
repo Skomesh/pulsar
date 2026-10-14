@@ -1,0 +1,16 @@
+# Keeps the security-sensitive paths from merging without review.
+# Replace Skomesh with any other maintainer handles as needed.
+
+*       @Skomesh
+
+# Routing logic changes the most and has the least test coverage.
+src/ui/main_window.py   @Skomesh
+src/utils/              @Skomesh
+
+# Anything that touches the filesystem or runs at install time.
+install.sh              @Skomesh
+uninstall.sh            @Skomesh
+commit-to-install.sh    @Skomesh
+
+# CI and release plumbing.
+.github/                @Skomesh

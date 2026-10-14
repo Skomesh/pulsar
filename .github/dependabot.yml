@@ -1,0 +1,23 @@
+# Keeps GitHub Actions' own dependencies current. CVEs in actions/checkout
+# or actions/setup-python are a real and repeatedly-exploited supply-chain
+# vector, so this is the highest-value entry in the file.
+#
+# Dependabot requires each (ecosystem, directory) pair to be unique, so there
+# is exactly one github-actions entry and one pip entry here.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    labels: [dependencies, ci]
+    commit-message:
+      prefix: ci
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    labels: [dependencies]
+    commit-message:
+      prefix: deps

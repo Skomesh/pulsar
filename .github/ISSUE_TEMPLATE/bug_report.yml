@@ -1,0 +1,99 @@
+name: Bug report
+description: Something in Pulsar doesn't work as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. Pulsar is a fork of
+        [pactl-gui](https://github.com/Skrappjaw/pactl-gui) and is in early
+        development, so some rough edges are expected — but reproducible
+        failures are worth reporting.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched existing issues and this has not been reported.
+          required: true
+        - label: I checked this is not already fixed on `main`.
+          required: false
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened
+      description: One or two sentences.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: |
+        Numbered steps. Include the exact commands if you ran any.
+      placeholder: |
+        1. Start Pulsar
+        2. Select sink "Speakers"
+        3. Click "Loopback"
+        4. Observe ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: audio-server
+    attributes:
+      label: Audio server
+      multiple: true
+      options:
+        - PipeWire
+        - PulseAudio
+        - Both / not sure
+    validations:
+      required: true
+
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Output of `pulsar --version` if it exists, else the git commit.
+      placeholder: "commit 98467d8"
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Distribution, desktop, Python version.
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error output
+      description: Paste the traceback or log lines verbatim.
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: redaction
+    attributes:
+      label: Sensitive data
+      options:
+        - label: >
+            I have removed any private paths, hostnames, or personal data
+            from the output above.
+          required: true

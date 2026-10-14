@@ -2,7 +2,14 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # Run on feature branches too, not just main. Pushing a branch and
+    # waiting for CI before opening a PR is the useful ordering; previously
+    # a branch push ran nothing and the first signal came from main after
+    # merge.
+    branches: ["**"]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -10,6 +17,13 @@ on:
 # Minimal permissions: read-only on contents.
 permissions:
   contents: read
+
+# One run per branch at a time. A new push cancels the previous in-flight
+# run for that ref -- CI on stale commits has no value. Use a distinct group
+# for pull requests so a PR's run is never cancelled by a main push.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 jobs:
   ci:
@@ -69,6 +83,61 @@ jobs:
         # Cheap, fast syntax sanity check across all .py files under src/.
         # pactl/pipewire are NOT invoked here -- this is pure AST compilation.
         run: python3 -m compileall -q src/
+
+      - name: Build and install the wheel
+        # This is the step that catches packaging breakage. `pip install -e .`
+        # above never produces a wheel, so a broken pyproject (missing
+        # main.py entry point, presets not declared as package data, a
+        # console-script pointing at a function that does not exist) is
+        # invisible to the rest of this workflow. Build for real, install
+        # into a clean venv, and import the console script.
+        #
+        # KNOWN FAILING as of this commit: the wheel does not contain
+        # src/main.py, so the declared entry point `pulsar = main:main`
+        # cannot resolve after a real install. Fixing that is tracked
+        # separately; until it is fixed this step fails, which is the
+        # point -- it should not be silently merged again.
+        run: |
+          set -euo pipefail
+          pip install build
+          python3 -m build --wheel
+          WHEEL=$(ls -1 dist/*.whl | head -1)
+          echo "built: $WHEEL"
+
+          # Inspect the wheel contents without installing: entry point and
+          # preset data are the two things most often omitted.
+          python3 -c "
+          import zipfile, sys
+          z = zipfile.ZipFile('$WHEEL')
+          names = z.namelist()
+          entry = [n for n in names if n.endswith('entry_points.txt')]
+          if not entry:
+              print('::error::wheel declares no entry point'); sys.exit(1)
+          print(z.read(entry[0]).decode().strip())
+          has_main = any(n.endswith('main.py') for n in names)
+          print('main.py packaged:', has_main)
+          if not has_main:
+              print('::error::src/main.py is not in the wheel, so the pulsar '
+                    'console script cannot resolve'); sys.exit(1)
+          print('presets packaged:', any('preset' in n.lower() for n in names))
+          "
+          echo "wheel contents verified"
+
+      - name: Verify install in a clean environment
+        # Install the built wheel into a throwaway venv with no source tree
+        # on the path, then import and run the console script's module. This
+        # is what a user gets; an editable install cannot prove it.
+        run: |
+          set -euo pipefail
+          python3 -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install --quiet dist/*.whl
+          # Import from outside the repo so the source tree cannot satisfy it.
+          cd /tmp
+          /tmp/smoke/bin/python -c "
+          import main
+          assert hasattr(main, 'main'), 'main.main is missing'
+          print('console entry point importable: OK')
+          "
 
       - name: Run tests
         # Allow the absence of a tests/ tree for now (project is pre-alpha).

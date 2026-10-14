@@ -47,6 +47,34 @@ python3 -m pytest tests/
 If you add a test that needs fixtures or sample `pactl` output, drop them in
 `tests/fixtures/` and document them in the test's docstring.
 
+### Reproducing CI locally
+
+A common contributor setup has `pactl` and `pw-dump` installed but no audio
+daemon running. On such a machine a plain `make test` reports 21 failures that
+GitHub's runner never sees, because the suite's `shutil.which()` guards find
+the tools and then fail to talk to a server that isn't there. Use the
+CI-equivalent runner instead; it hides `pactl`, `pw-dump`, `pw-record`,
+`pw-top` and `gdbus` so those guards take the "not available" branch and the
+run matches CI:
+
+```sh
+./tests/run_ci_equivalent.sh -q
+```
+
+Extra arguments are forwarded to pytest, and a test target replaces the
+default `tests/`:
+
+```sh
+./tests/run_ci_equivalent.sh -q tests/test_device_names.py
+```
+
+Treat this as the command of record for a clean tree. As of this commit it
+reports `8 failed, 55 passed, 53 skipped`; the 8 failures are the pre-existing
+`gdbus` portal-capture tests, not something you introduced. If your change
+raises the pass count, that's the change working. The "Running tests" section
+above still advertises `make test`; use the runner when you want CI's answer,
+and say so in your PR description if the two disagree.
+
 ## Code style
 
 - Follow [PEP 8](https://peps.python.org/pep-0008/).

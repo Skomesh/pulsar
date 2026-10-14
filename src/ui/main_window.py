@@ -13,6 +13,7 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Any, Dict, List, Optional
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.device_names import classify_device_name
 from utils.pactl_runner import PactlRunner
 from utils.preset_manager import PresetManager
 from utils.profile_manager import ProfileManager
@@ -5013,93 +5014,17 @@ class MainWindow:
             return info
 
     def _extract_hardware_device_info_from_name(self, device_name, device_data):
-        """
-        Extract device information from PipeWire device names.
+        """Classify a PipeWire device name into device info.
 
         Examples:
         - alsa_output.usb-BOSS_GCS-8-01.pro-output-0 -> Device: BOSS GCS-8
         - alsa_input.usb-BEHRINGER_UMC404HD_192k-00.pro-input-0 -> Device: BEHRINGER UMC404HD
         - alsa_output.pci-0000_01_00.1.hdmi-stereo -> Device: GPU HDMI Audio
+
+        The parsing itself lives in utils.device_names.classify_device_name
+        so it can be unit-tested without a display or an audio server.
         """
-        if not device_name:
-            return None
-
-        # Parse PipeWire ALSA device naming patterns
-        if device_name.startswith('alsa_'):
-            # Extract connection type and device identifier
-            parts = device_name.split('.')
-            if len(parts) >= 2:
-                connection_part = parts[1]  # e.g., "usb-BOSS_GCS-8-01" or "pci-0000_01_00"
-
-                # Determine connection type
-                if connection_part.startswith('usb-'):
-                    device_type = 'usb'
-                    # Extract device name from USB identifier
-                    usb_part = connection_part[4:]  # Remove "usb-"
-                    # Parse patterns like "BOSS_GCS-8-01" or "BEHRINGER_UMC404HD_192k-00"
-                    device_identifier = usb_part.rsplit('-', 1)[0]  # Remove trailing number
-                    # Clean up device name
-                    device_name_clean = device_identifier.replace('_', ' ').replace('-', ' ')
-                    # Extract brand and model
-                    if ' ' in device_name_clean:
-                        parts = device_name_clean.split(' ', 1)
-                        brand = parts[0]
-                        model = parts[1] if len(parts) > 1 else ''
-                        device_display_name = f"{brand} {model}".strip()
-                    else:
-                        device_display_name = device_name_clean
-
-                elif connection_part.startswith('pci-'):
-                    # PCI devices (usually GPU HDMI or built-in audio)
-                    properties = device_data.get('properties', {})
-                    device_desc = properties.get('device.description', '')
-
-                    if any(gpu in device_desc.lower() for gpu in ['nvidia', 'amd', 'radeon', 'intel hd']):
-                        device_type = 'hdmi'
-                        device_display_name = device_desc or 'GPU Audio'
-                        device_identifier = connection_part
-                    else:
-                        device_type = 'builtin'
-                        device_display_name = device_desc or 'Built-in Audio'
-                        device_identifier = connection_part
-
-                elif connection_part.startswith('bluez-'):
-                    device_type = 'bluetooth'
-                    device_identifier = connection_part
-                    properties = device_data.get('properties', {})
-                    device_display_name = properties.get('device.description', 'Bluetooth Audio')
-
-                else:
-                    # Unknown connection type
-                    device_type = 'builtin'
-                    device_identifier = connection_part
-                    device_display_name = device_data.get('description', device_name)
-
-                # Create device key for grouping (without input/output suffix)
-                device_key = f"{device_type}_{device_identifier}"
-
-                return {
-                    'device_key': device_key,
-                    'device_type': device_type,
-                    'device_name': device_display_name,
-                    'device_identifier': device_identifier,
-                    'connection_part': connection_part,
-                    'properties': device_data.get('properties', {})
-                }
-
-        # Fallback for non-ALSA devices
-        device_type = self._detect_device_type(sink_data=device_data if 'sink' in str(type(device_data)) else None,
-                                             source_data=device_data if 'source' in str(type(device_data)) else None)
-        device_display_name = device_data.get('description', device_name)
-
-        return {
-            'device_key': f"{device_type}_{device_name}",
-            'device_type': device_type,
-            'device_name': device_display_name,
-            'device_identifier': device_name,
-            'connection_part': device_name,
-            'properties': device_data.get('properties', {})
-        }
+        return classify_device_name(device_name, device_data or {})
 
     def _devices_match(self, device_info1, device_info2):
         """Check if two device info objects represent the same physical device."""

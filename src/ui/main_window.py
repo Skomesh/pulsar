@@ -2278,7 +2278,8 @@ class MainWindow:
 
         # Categorize hardware devices
         hardware_categories = self._categorize_hardware_devices(
-            remaining_modules, remaining_sinks, remaining_sources
+            remaining_modules, remaining_sinks, remaining_sources,
+            show_monitors=self.show_monitors_var.get()
         )
 
         # Create hardware category groups directly at top level
@@ -4570,10 +4571,14 @@ class MainWindow:
         # Default to built-in for unidentified hardware
         return 'builtin'
 
-    def _categorize_hardware_devices(self, modules, sinks, sources):
+    def _categorize_hardware_devices(self, modules, sinks, sources, show_monitors=False):
         """
         Categorize hardware devices by connection type and group individual devices.
         Updated for PipeWire compatibility - works with direct device names instead of card modules.
+
+        show_monitors: whether monitor sources ('.monitor') should be included.
+            Passed in by the caller rather than read from the Tk checkbox, so
+            this method stays testable on a bare instance with no display.
 
         Returns: Dictionary with categories as keys and device groups as values.
         """
@@ -4632,7 +4637,7 @@ class MainWindow:
                 continue
 
             # Handle monitor sources based on checkbox
-            if '.monitor' in source_name and not self.show_monitors_var.get():
+            if '.monitor' in source_name and not show_monitors:
                 continue
 
             # Parse device info from source name
@@ -4710,7 +4715,7 @@ class MainWindow:
                 source_name = source.get('name', '')
                 if any(virtual_name in source_name for virtual_name in ['test', 'voip']):
                     continue
-                if '.monitor' in source_name and not self.show_monitors_var.get():
+                if '.monitor' in source_name and not show_monitors:
                     continue
 
                 device_type = self._detect_device_type(source_data=source)

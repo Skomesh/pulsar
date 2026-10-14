@@ -1,12 +1,74 @@
-"""Unit tests for pure device-name parsing in src/utils/device_names.py.
+"""Unit tests for pure device-name parsing in src/utils/device_names.py,
+and for the monitor-filter of MainWindow._categorize_hardware_devices.
 
-These call module-level functions directly: no Tkinter, no MainWindow, no
-mocks, no display, no pactl.
+The parsing tests call module-level functions directly: no Tkinter, no
+MainWindow, no mocks, no display, no pactl. The monitor tests use a bare
+`object.__new__(MainWindow)` and only touch pure methods.
 """
 
 import unittest
 
+from ui.main_window import MainWindow
 from utils.device_names import classify_device_name
+
+#: A PipeWire monitor of the built-in analog card. Must NOT be named
+#: `alsa_output.test.monitor`: line 4631 drops any name containing 'test'
+#: or 'voip' before the monitor check is ever reached, so such a fixture
+#: could never exercise the monitor filter.
+MONITOR_SOURCE_NAME = "alsa_output.pci-0000_00_1f.3.analog-stereo.monitor"
+PLAIN_SOURCE_NAME = "alsa_input.pci-0000_00_1f.3.analog-stereo"
+
+
+def collect_source_dicts(categories):
+    """Every source dict reachable in a `_categorize_hardware_devices` result.
+
+    The result is a dict keyed by device type ('builtin'/'usb'/'bluetooth'/
+    'hdmi') whose values are lists of entries. A source can appear either as
+    an orphaned_source entry's 'source' dict or inside a
+    hardware_device_group entry's 'sources' list, so flatten both shapes.
+
+    There is no top-level 'sources' key -- reading result.get("sources", [])
+    would always yield [] and every assertion built on it would pass
+    vacuously.
+    """
+    found = []
+    for entries in categories.values():
+        for entry in entries:
+            if isinstance(entry.get("source"), dict):
+                found.append(entry["source"])
+            found.extend(s for s in entry.get("sources", []) if isinstance(s, dict))
+    return found
+
+
+def _fixture_sources():
+    return [
+        {"id": "src-monitor", "name": MONITOR_SOURCE_NAME,
+         "properties": {"device.description": "Built-in Audio Analog Stereo"}},
+        {"id": "src-plain", "name": PLAIN_SOURCE_NAME,
+         "properties": {"device.description": "Built-in Audio Analog Stereo"}},
+    ]
+
+
+class TestMonitorFilter(unittest.TestCase):
+    """show_monitors is an explicit parameter, so a bare instance can drive it."""
+
+    def _run(self, show_monitors):
+        win = object.__new__(MainWindow)
+        return win._categorize_hardware_devices(
+            [], [], _fixture_sources(), show_monitors=show_monitors
+        )
+
+    def test_monitor_source_hidden_when_show_monitors_false(self):
+        names = [s.get("name") for s in collect_source_dicts(self._run(False))]
+        # Guard: the non-monitor source must survive, or the assertion below
+        # would be vacuously true on an empty/garbage result.
+        self.assertIn(PLAIN_SOURCE_NAME, names)
+        self.assertNotIn(MONITOR_SOURCE_NAME, names)
+
+    def test_monitor_source_shown_when_show_monitors_true(self):
+        names = [s.get("name") for s in collect_source_dicts(self._run(True))]
+        self.assertIn(PLAIN_SOURCE_NAME, names)
+        self.assertIn(MONITOR_SOURCE_NAME, names)
 
 
 class TestUsbNames(unittest.TestCase):

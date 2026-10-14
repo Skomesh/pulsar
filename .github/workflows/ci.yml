@@ -104,22 +104,37 @@ jobs:
           WHEEL=$(ls -1 dist/*.whl | head -1)
           echo "built: $WHEEL"
 
-          # Inspect the wheel contents without installing: entry point and
-          # preset data are the two things most often omitted.
+          # Inspect the wheel contents without installing. Assert on real
+          # payload, not on substrings: a docstring mentioning "presets"
+          # would satisfy a naive check and hide the actual defect.
           python3 -c "
           import zipfile, sys
           z = zipfile.ZipFile('$WHEEL')
           names = z.namelist()
+
+          errors = []
+
           entry = [n for n in names if n.endswith('entry_points.txt')]
           if not entry:
-              print('::error::wheel declares no entry point'); sys.exit(1)
-          print(z.read(entry[0]).decode().strip())
-          has_main = any(n.endswith('main.py') for n in names)
-          print('main.py packaged:', has_main)
-          if not has_main:
-              print('::error::src/main.py is not in the wheel, so the pulsar '
-                    'console script cannot resolve'); sys.exit(1)
-          print('presets packaged:', any('preset' in n.lower() for n in names))
+              errors.append('wheel declares no entry point')
+          else:
+              print(z.read(entry[0]).decode().strip())
+
+          # main.py must be an importable top-level module, or the
+          # `pulsar` console script cannot resolve.
+          if not any(n == 'main.py' or n.startswith('main.py') for n in names):
+              errors.append('main.py is not in the wheel, so `pulsar` cannot resolve')
+
+          # The preset data must actually ship as a .json payload.
+          data = [n for n in names if n.endswith('.json')]
+          if not data:
+              errors.append('no preset .json shipped; built-in profiles would be empty')
+          else:
+              print('preset data:', data)
+
+          for e in errors:
+              print('::error::' + e)
+          sys.exit(1 if errors else 0)
           "
           echo "wheel contents verified"
 
@@ -139,6 +154,23 @@ jobs:
           print('console entry point importable: OK')
           "
 
+      - name: Verify installed package loads its preset data
+        # Stronger than inspecting the zip: proves the installed package can
+        # actually READ the data it shipped. A wheel can contain the file and
+        # still resolve it to the wrong path, which is exactly what
+        # _load_builtin used to do.
+        run: |
+          set -euo pipefail
+          cd /tmp
+          /tmp/smoke/bin/python -c "
+          import tempfile
+          from utils.profile_manager import ProfileManager
+          pm = ProfileManager(presets_dir=tempfile.mkdtemp())
+          n = len(pm._load_builtin())
+          assert n > 0, 'installed package loaded ZERO built-in profiles'
+          print(f'built-in profiles load from installed wheel: {n}')
+          "
+
       - name: Run tests
         # Allow the absence of a tests/ tree for now (project is pre-alpha).
         # If tests/ exists and has at least one test file, run pytest normally
@@ -150,9 +182,14 @@ jobs:
             echo "No tests found in tests/, skipping pytest"
           fi
 
-      - name: Validate presets JSON
-        # Only run if the file is present. We don't fail on a missing file
-        # (project may not have shipped its first user preset yet), but if it
-        # IS present it MUST be valid JSON.
-        if: hashFiles('presets/user_presets.json') != ''
-        run: python3 -c "import json; json.load(open('presets/user_presets.json'))"
+      - name: Validate bundled preset JSON
+        # builtin_profiles.json ships in the package and is parsed at
+        # startup, so a syntax error there breaks every launch. This used
+        # to point at presets/user_presets.json, which is per-user runtime
+        # data and no longer tracked -- the check was dead code.
+        run: |
+          set -euo pipefail
+          for f in src/utils/presets/*.json; do
+            python3 -c "import json,sys; json.load(open('$f'))"
+            echo "valid: $f"
+          done

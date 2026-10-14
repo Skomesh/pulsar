@@ -162,20 +162,19 @@ class ProfileManager:
     def _load_builtin(self) -> Dict[str, Any]:
         """Load the bundled builtin_profiles.json from the package's presets/ dir.
 
-        Returns {} if the file doesn't exist (e.g. dev install) or fails to parse.
-        Built-in profiles are always available and can be overridden by user
-        profiles of the same name.
+        Returns {} if the file doesn't exist or fails to parse. Built-in
+        profiles are always available and can be overridden by user profiles
+        of the same name.
         """
-        # Built-in profiles live in <project_root>/presets/, not in the user's
-        # presets dir, so they survive across installs. The project's presets/
-        # is at the project root, two levels up from this file
-        # (src/utils/profile_manager.py -> src/utils -> src -> root).
+        # Resolve relative to THIS FILE, one level up: the data is shipped
+        # inside the package (src/utils/presets/), so the path is identical
+        # in a source checkout and in site-packages after a wheel install.
+        #
+        # The previous code walked two levels up to the project root, which
+        # does not exist in an installed wheel -- so an installed Pulsar
+        # silently loaded zero built-in profiles.
         builtin_path = os.path.join(
-            os.path.dirname(
-                os.path.dirname(
-                    os.path.dirname(os.path.abspath(__file__))
-                )
-            ),
+            os.path.dirname(os.path.abspath(__file__)),
             "presets",
             "builtin_profiles.json",
         )

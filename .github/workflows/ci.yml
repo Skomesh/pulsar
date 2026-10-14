@@ -2,7 +2,14 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # Run on feature branches too, not just main. Pushing a branch and
+    # waiting for CI before opening a PR is the useful ordering; previously
+    # a branch push ran nothing and the first signal came from main after
+    # merge.
+    branches: ["**"]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -10,6 +17,13 @@ on:
 # Minimal permissions: read-only on contents.
 permissions:
   contents: read
+
+# One run per branch at a time. A new push cancels the previous in-flight
+# run for that ref -- CI on stale commits has no value. Use a distinct group
+# for pull requests so a PR's run is never cancelled by a main push.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 jobs:
   ci:
@@ -70,6 +84,114 @@ jobs:
         # pactl/pipewire are NOT invoked here -- this is pure AST compilation.
         run: python3 -m compileall -q src/
 
+      - name: Build and install the wheel
+        # This is the step that catches packaging breakage. `pip install -e .`
+        # above never produces a wheel, so a broken pyproject (missing
+        # main.py entry point, presets not declared as package data, a
+        # console-script pointing at a function that does not exist) is
+        # invisible to the rest of this workflow. Build for real, install
+        # into a clean venv, and import the console script.
+        #
+        # `set -o pipefail` matters: `pip install build | tee /dev/null`
+        # would otherwise report success when pip failed.
+        run: |
+          set -euo pipefail
+
+          # Install build tooling. If THIS is what fails, say so explicitly
+          # rather than letting a later line report an unrelated cause.
+          if ! pip install --upgrade build; then
+            echo "::error::failed to install the 'build' package"
+            exit 1
+          fi
+
+          # Build, and on failure surface the tail of the log. A bare
+          # "command failed with exit code 1" from `python3 -m build` gives
+          # no clue whether the failure was setuptools, a missing file, or
+          # the entry point being invoked without a display.
+          if ! python3 -m build --wheel > /tmp/build.log 2>&1; then
+            echo "::error::python -m build --wheel failed"
+            echo "----- last 40 lines of /tmp/build.log -----"
+            tail -40 /tmp/build.log
+            echo "------------------------------------------"
+            exit 1
+          fi
+
+          WHEEL=$(ls -1 dist/*.whl | head -1)
+          if [ -z "$WHEEL" ]; then
+            echo "::error::build reported success but produced no wheel"
+            ls -la dist/ || true
+            exit 1
+          fi
+          echo "built: $WHEEL"
+
+          # Inspect the wheel contents without installing. Assert on real
+          # payload, not on substrings: a docstring mentioning "presets"
+          # would satisfy a naive check and hide the actual defect.
+          python3 - "$WHEEL" <<'PYCHECK'
+          import sys
+          import zipfile
+
+          z = zipfile.ZipFile(sys.argv[1])
+          names = z.namelist()
+          errors = []
+
+          entry = [n for n in names if n.endswith("entry_points.txt")]
+          if not entry:
+              errors.append("wheel declares no entry point")
+          else:
+              print(z.read(entry[0]).decode().strip())
+
+          # main.py must be an importable top-level module, or the
+          # `pulsar` console script cannot resolve.
+          if not any(n == "main.py" for n in names):
+              errors.append("main.py is not in the wheel, so `pulsar` cannot resolve")
+
+          # The preset data must actually ship as a .json payload.
+          data = [n for n in names if n.endswith(".json")]
+          if not data:
+              errors.append("no preset .json shipped; built-in profiles would be empty")
+          else:
+              print("preset data:", data)
+
+          for e in errors:
+              print("::error::" + e)
+          sys.exit(1 if errors else 0)
+          PYCHECK
+          echo "wheel contents verified"
+
+      - name: Verify install in a clean environment
+        # Install the built wheel into a throwaway venv with no source tree
+        # on the path, then import and run the console script's module. This
+        # is what a user gets; an editable install cannot prove it.
+        run: |
+          set -euo pipefail
+          python3 -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install --quiet dist/*.whl
+          # Import from outside the repo so the source tree cannot satisfy it.
+          cd /tmp
+          /tmp/smoke/bin/python -c "
+          import main
+          assert hasattr(main, 'main'), 'main.main is missing'
+          print('console entry point importable: OK')
+          "
+
+      - name: Verify installed package loads its preset data
+        # Stronger than inspecting the zip: proves the installed package can
+        # actually READ the data it shipped. A wheel can contain the file and
+        # still resolve it to the wrong path, which is exactly what
+        # _load_builtin used to do.
+        run: |
+          set -euo pipefail
+          cd /tmp
+          /tmp/smoke/bin/python -c "
+          import tempfile
+          from utils.profile_manager import ProfileManager
+          pm = ProfileManager(presets_dir=tempfile.mkdtemp())
+          n = len(pm._load_builtin())
+          assert n > 0, 'installed package loaded ZERO built-in profiles'
+          print(f'built-in profiles load from installed wheel: {n}')
+          "
+
       - name: Run tests
         # Allow the absence of a tests/ tree for now (project is pre-alpha).
         # If tests/ exists and has at least one test file, run pytest normally
@@ -81,9 +203,14 @@ jobs:
             echo "No tests found in tests/, skipping pytest"
           fi
 
-      - name: Validate presets JSON
-        # Only run if the file is present. We don't fail on a missing file
-        # (project may not have shipped its first user preset yet), but if it
-        # IS present it MUST be valid JSON.
-        if: hashFiles('presets/user_presets.json') != ''
-        run: python3 -c "import json; json.load(open('presets/user_presets.json'))"
+      - name: Validate bundled preset JSON
+        # builtin_profiles.json ships in the package and is parsed at
+        # startup, so a syntax error there breaks every launch. This used
+        # to point at presets/user_presets.json, which is per-user runtime
+        # data and no longer tracked -- the check was dead code.
+        run: |
+          set -euo pipefail
+          for f in src/utils/presets/*.json; do
+            python3 -c "import json,sys; json.load(open('$f'))"
+            echo "valid: $f"
+          done

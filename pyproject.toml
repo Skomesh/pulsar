@@ -7,8 +7,8 @@ name = "pulsar"
 version = "0.1.0"
 description = "Graphical audio routing manager for PulseAudio/PipeWire"
 readme = "README.md"
-requires-python = ">=3.6"
-license = {text = "MIT"}
+requires-python = ">=3.8"
+license = {file = "LICENSE"}
 authors = [
     {name = "Skomesh"},
 ]
@@ -18,26 +18,8 @@ keywords = [
     "pipewire",
     "routing",
     "streamer",
-    "linux",
 ]
-classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Intended Audience :: End Users/Desktop",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: POSIX :: Linux",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.6",
-    "Programming Language :: Python :: 3.7",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Topic :: Multimedia :: Sound/Audio",
-    "Topic :: Utilities",
-    "Environment :: X11 Applications :: GTK",
-]
+
 dependencies = []
 
 [project.optional-dependencies]
@@ -55,10 +37,20 @@ Issues = "https://github.com/Skomesh/pulsar/issues"
 Source = "https://github.com/Skomesh/pulsar"
 
 [tool.setuptools]
-package-dir = {"" = "src"}
+# main.py is a top-level module, not a package, so automatic package
+# discovery skips it -- which left the declared `pulsar = main:main` entry
+# point unresolvable after a real install. Name it explicitly.
+py-modules = ["main"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+# builtin_profiles.json is read at runtime by utils/profile_manager.py.
+# Without this the wheel ships no preset data and the app silently starts
+# with an empty profile list. Data lives in the package dir so it resolves
+# from an installed wheel, not just a source checkout.
+utils = ["presets/*.json"]
 
 [tool.ruff]
 line-length = 100

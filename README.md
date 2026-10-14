@@ -1,5 +1,10 @@
 # Pulsar
 
+[![CI](https://github.com/Skomesh/pulsar/actions/workflows/ci.yml/badge.svg)](https://github.com/Skomesh/pulsar/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/Skomesh/pulsar/blob/main/LICENSE)
+[![Linux](https://img.shields.io/badge/platform-Linux-blue.svg)](https://www.kernel.org/)
+[![Forked from pactl-gui](https://img.shields.io/badge/forked%20from-Skrappjaw%2Fpactl--gui-informational)](https://github.com/Skrappjaw/pactl-gui)
+
 A graphical audio routing manager for Linux, built on PulseAudio and PipeWire.
 
 Pulsar is a fork of [pactl-gui](https://github.com/Skrappjaw/pactl-gui) by Skrappjaw, licensed under MIT. We're extending it with routing features aimed at streamers, gamers, and content creators who need to split audio between apps (game, voice chat, music, microphone) into independently controllable channels.
@@ -59,7 +64,18 @@ git merge upstream/main
 
 ## License
 
-MIT — same as the upstream pactl-gui project. See the original [LICENSE](https://github.com/Skrappjaw/pactl-gui/blob/main/LICENSE) for the canonical text.
+MIT — see [LICENSE](LICENSE) in this repository for the full text.
+
+This is a fork of [pactl-gui](https://github.com/Skrappjaw/pactl-gui), whose README states
+the project is MIT-licensed. Upstream does not currently publish a `LICENSE` file, so this
+repository ships its own MIT text; portions of the code are Copyright (c) Skrappjaw and are
+used under the terms of that license.
+
+## Reporting bugs
+
+Issues are tracked in the [issue tracker](https://github.com/Skomesh/pulsar/issues) — please
+use the templates so the report includes the details needed to reproduce it. Security
+problems should go through [SECURITY.md](SECURITY.md) rather than a public issue.
 
 ## Credits
 

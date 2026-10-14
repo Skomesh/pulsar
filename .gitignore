@@ -11,6 +11,11 @@ build/
 dist/
 *.egg-info/
 .eggs/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.ruff_cache/
 
 # Virtual environments
 venv/
@@ -34,5 +39,15 @@ Thumbs.db
 .pytest_cache/
 .mypy_cache/
 
+# Hermes agent working files (plan documents live here)
+.hermes/
+
 # User-specific
+# Per-user routing presets, written by the running app. Tracked in git for
+# historical reasons, but this IS user data -- it is created at runtime by
+# src/utils/preset_manager.py and must never be committed going forward.
 presets/user_presets.json
+
+# Audit/workflow scratch files from automated runs
+wf_*/
+*.bak

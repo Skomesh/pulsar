@@ -1,0 +1,56 @@
+name: Feature request
+description: Suggest an improvement or new capability
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Pulsar is early-stage. Proposals that fit the audio-routing focus are
+        most likely to land — but please check the roadmap first, since some
+        things may already be planned.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: |
+        Describe the situation you're in, not the solution you're imagining.
+        "I stream and my mic follows game audio when I tab out" is more
+        useful than "add a mute-on-focus toggle".
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+    validations:
+      required: false
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - Small — a focused, self-contained change
+        - Medium — touches several parts of the UI or routing logic
+        - Large — architectural, or needs discussion before code
+    validations:
+      required: true
+
+  - type: textarea
+    id: audio-context
+    attributes:
+      label: Audio context
+      description: |
+        Which sink/source/module types does this involve? (ALSA, BlueZ,
+        HDMI, loopback, monitor sources…)
+    validations:
+      required: false

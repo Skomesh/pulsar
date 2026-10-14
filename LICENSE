@@ -2,11 +2,6 @@ MIT License
 
 Copyright (c) 2026, Skomesh
 
-This project is a fork of pactl-gui by Skrappjaw
-(https://github.com/Skrappjaw/pactl-gui) and incorporates code from that
-project under its MIT license claim. Portions of this software are
-Copyright (c) Skrappjaw and are used in accordance with that license.
-
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights

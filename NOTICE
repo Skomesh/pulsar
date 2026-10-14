@@ -1,0 +1,12 @@
+Pulsar
+Copyright (c) 2026, Skomesh
+
+This project is a fork of pactl-gui by Skrappjaw
+(https://github.com/Skrappjaw/pactl-gui) and incorporates code from that
+project. Portions of this software are Copyright (c) Skrappjaw and are used
+under the terms of the MIT License.
+
+Upstream pactl-gui states in its README that the project is MIT-licensed,
+but does not publish a LICENSE file. This repository therefore ships its own
+copy of the MIT License (see LICENSE); attribution to Skrappjaw is recorded
+here.

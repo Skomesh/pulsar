@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
 # Run the test suite the way a GitHub ubuntu-latest runner does: with pactl,
-# pw-dump, pw-record, pw-top and gdbus all hidden, so the suite's own
-# shutil.which() guards take the "not available" branch.
+# pw-dump, pw-record and pw-top hidden, so the suite's own shutil.which()
+# guards take the "not available" branch.
 #
 # The sandbox has these tools installed but no audio daemon, so a plain
 # pytest run reports 21 failures that CI never sees. This script is the
 # honest baseline.
+#
+# gdbus is deliberately NOT hidden. ubuntu-latest ships libglib2.0-bin, so
+# the runner HAS it, and tests/test_pw_app_capture.py's portal tests need it
+# present to reach the code under test. Hiding it produced 8 failures here
+# that do not exist on CI -- the mirror image of the problem this script
+# exists to solve. Verified: hiding only pactl/pw-* gives 75 passed,
+# 53 skipped, 0 failed, which matches the green run on this branch.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -16,7 +23,7 @@ cat > "$SHADOW_DIR/sitecustomize.py" <<'PYEOF'
 import shutil
 
 _real = shutil.which
-HIDE = {'pactl', 'pw-dump', 'pw-record', 'pw-top', 'gdbus'}
+HIDE = {'pactl', 'pw-dump', 'pw-record', 'pw-top'}
 
 
 def which(cmd, *args, **kwargs):

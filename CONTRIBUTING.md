@@ -53,13 +53,18 @@ A common contributor setup has `pactl` and `pw-dump` installed but no audio
 daemon running. On such a machine a plain `make test` reports 21 failures that
 GitHub's runner never sees, because the suite's `shutil.which()` guards find
 the tools and then fail to talk to a server that isn't there. Use the
-CI-equivalent runner instead; it hides `pactl`, `pw-dump`, `pw-record`,
-`pw-top` and `gdbus` so those guards take the "not available" branch and the
-run matches CI:
+CI-equivalent runner instead; it hides `pactl`, `pw-dump`, `pw-record` and
+`pw-top` so those guards take the "not available" branch and the run matches
+CI:
 
 ```sh
 ./tests/run_ci_equivalent.sh -q
 ```
+
+It deliberately leaves `gdbus` visible, because `ubuntu-latest` ships it
+(via `libglib2.0-bin`) and the portal tests need it present. Hiding it invents
+failures CI does not have. A matching run reports `75 passed, 53 skipped` and
+no failures.
 
 Extra arguments are forwarded to pytest, and a test target replaces the
 default `tests/`:

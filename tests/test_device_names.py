@@ -221,5 +221,50 @@ class TestClassifiersAgree(unittest.TestCase):
         )
 
 
+class TestMainWindowBluetoothRegression(unittest.TestCase):
+    """The bug the branch exists to fix lived in MainWindow, not in the
+    extracted module.
+
+    TestBluetoothNames covers classify_device_name directly, so it passes
+    even when MainWindow still has the old inline parsing. These tests go
+    through the UI path -- the delegate at MainWindow._extract_hardware_
+    device_info_from_name -- which is what actually shipped broken.
+    """
+
+    def setUp(self):
+        self.win = object.__new__(MainWindow)
+
+    def test_ui_path_classifies_bluez_sink_as_bluetooth(self):
+        result = self.win._extract_hardware_device_info_from_name(
+            "bluez_output.AC_12_2F_9B_00_11.1",
+            {"properties": {"device.description": "Studio Headphones"}},
+        )
+        self.assertEqual(
+            result["device_type"],
+            "bluetooth",
+            "MainWindow must not file a bluetooth headset as builtin",
+        )
+
+    def test_ui_path_agrees_with_detect_device_type(self):
+        data = {
+            "name": "bluez_output.AC_12_2F_9B_00_11.1",
+            "description": "Studio Headphones",
+            "properties": {},
+        }
+        ui_type = self.win._extract_hardware_device_info_from_name(
+            data["name"], data
+        )["device_type"]
+        self.assertEqual(ui_type, detect_device_type(sink_data=data))
+
+    def test_ui_path_keeps_alsa_behaviour(self):
+        """Guard the extraction from over-correcting: ALSA names must be
+        unaffected by the bluetooth fix."""
+        result = self.win._extract_hardware_device_info_from_name(
+            "alsa_output.usb-BOSS_GCS-8-01.pro-output-0", {"properties": {}}
+        )
+        self.assertEqual(result["device_type"], "usb")
+        self.assertEqual(result["device_name"], "BOSS GCS 8")
+
+
 if __name__ == "__main__":
     unittest.main()

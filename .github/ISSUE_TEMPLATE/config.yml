@@ -1,8 +1,9 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
-    url: https://github.com/Skomesh/pulsar/blob/main/SECURITY.md
-    about: Please report security issues privately — see SECURITY.md.
-  - name: Question or discussion
-    url: https://github.com/Skomesh/pulsar/discussions
-    about: Open-ended questions that are not bugs or feature requests.
+    # The advisory form opens directly in the reporter's browser, so it
+    # works whether or not SECURITY.md has been read and requires no
+    # account beyond GitHub's own. Pointing this at blob/main/SECURITY.md
+    # instead would 404 until the file lands on main.
+    url: https://github.com/Skomesh/pulsar/security/advisories/new
+    about: Report privately — do not open a public issue for a security problem.

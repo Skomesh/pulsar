@@ -7,3 +7,6 @@ contact_links:
     # instead would 404 until the file lands on main.
     url: https://github.com/Skomesh/pulsar/security/advisories/new
     about: Report privately — do not open a public issue for a security problem.
+  - name: Question or discussion
+    url: https://github.com/Skomesh/pulsar/discussions
+    about: Open-ended questions that are neither bugs nor feature requests.

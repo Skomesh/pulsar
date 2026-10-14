@@ -9,7 +9,7 @@ MainWindow, no mocks, no display, no pactl. The monitor tests use a bare
 import unittest
 
 from ui.main_window import MainWindow
-from utils.device_names import classify_device_name
+from utils.device_names import classify_device_name, detect_device_type
 
 #: A PipeWire monitor of the built-in analog card. Must NOT be named
 #: `alsa_output.test.monitor`: line 4631 drops any name containing 'test'
@@ -156,6 +156,69 @@ class TestBranchCoverage(unittest.TestCase):
         )
         self.assertEqual(result["device_type"], "builtin")
         self.assertEqual(result["device_name"], "Bare ALSA")
+
+
+# --- Task 5: detect_device_type moved out of MainWindow, plus the
+# --- agreement tests pinning that both classifiers return the same type
+# --- for the same device. Added the module_data case because the real
+# --- signature takes three parameters, not the two the plan states.
+
+class TestDetectDeviceType(unittest.TestCase):
+    def test_bluez_sink_is_bluetooth(self):
+        data = {"name": "bluez_output.AC_12_2F_9B_00_11.1",
+                "description": "Studio Headphones", "properties": {}}
+        self.assertEqual(detect_device_type(sink_data=data), "bluetooth")
+
+    def test_usb_sink_is_usb(self):
+        data = {"name": "alsa_output.usb-BOSS_GCS-8-01.pro-output-0",
+                "description": "BOSS", "properties": {}}
+        self.assertEqual(detect_device_type(sink_data=data), "usb")
+
+    def test_nothing_supplied_is_builtin(self):
+        self.assertEqual(detect_device_type(), "builtin")
+
+    def test_module_data_is_classified(self):
+        """module_data is the third parameter; _extract_hardware_device_info
+        depends on it, so dropping it would silently mis-file every module."""
+        data = {"name": "module-bluetooth", "argument": "card=bluez",
+                "properties": {"device.bus": "bluetooth"}}
+        self.assertEqual(detect_device_type(module_data=data), "bluetooth")
+
+    def test_delegate_on_main_window_keeps_all_three_parameters(self):
+        """The MainWindow method is a thin delegate; every call site must
+        keep working through it, including the module_data one."""
+        win = object.__new__(MainWindow)
+        sink = {"name": "alsa_output.usb-BOSS_GCS-8-01.pro-output-0",
+                "properties": {}}
+        module = {"name": "module-hdmi", "properties": {}}
+        self.assertEqual(win._detect_device_type(sink_data=sink), "usb")
+        self.assertEqual(win._detect_device_type(source_data=sink), "usb")
+        self.assertEqual(win._detect_device_type(module_data=module), "hdmi")
+
+
+class TestClassifiersAgree(unittest.TestCase):
+    """The two classifiers must not disagree about the same device.
+
+    Before the extraction, _extract_hardware_device_info_from_name returned
+    'builtin' for a bluetooth headset while _detect_device_type returned
+    'bluetooth' for the identical input.
+    """
+
+    def test_bluez_agrees(self):
+        name = "bluez_output.AC_12_2F_9B_00_11.1"
+        data = {"name": name, "description": "Studio Headphones", "properties": {}}
+        self.assertEqual(
+            classify_device_name(name, data)["device_type"],
+            detect_device_type(sink_data=data),
+        )
+
+    def test_usb_agrees(self):
+        name = "alsa_output.usb-BOSS_GCS-8-01.pro-output-0"
+        data = {"name": name, "description": "BOSS", "properties": {}}
+        self.assertEqual(
+            classify_device_name(name, data)["device_type"],
+            detect_device_type(sink_data=data),
+        )
 
 
 if __name__ == "__main__":

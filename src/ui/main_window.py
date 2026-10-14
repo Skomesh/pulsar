@@ -13,7 +13,7 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Any, Dict, List, Optional
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.device_names import classify_device_name
+from utils.device_names import classify_device_name, detect_device_type
 from utils.pactl_runner import PactlRunner
 from utils.preset_manager import PresetManager
 from utils.profile_manager import ProfileManager
@@ -4492,84 +4492,10 @@ class MainWindow:
             self.status_var.set("Monitor sources hidden")
 
     def _detect_device_type(self, sink_data=None, source_data=None, module_data=None):
-        """
-        Detect the hardware device type based on module, sink, or source data.
-        Updated for PipeWire compatibility.
-
-        Returns: One of 'builtin', 'usb', 'bluetooth', 'hdmi', 'unknown'
-        """
-        # Combine all available data for analysis
-        all_data = []
-        if module_data:
-            all_data.append(module_data)
-        if sink_data:
-            all_data.append(sink_data)
-        if source_data:
-            all_data.append(source_data)
-
-        # Check properties from all sources
-        for data in all_data:
-            if not data:
-                continue
-
-            # Check device name first (PipeWire pattern)
-            name = data.get('name', '').lower()
-
-            # PipeWire ALSA device patterns
-            if 'alsa_output.usb-' in name or 'alsa_input.usb-' in name:
-                return 'usb'
-            if 'alsa_output.pci-' in name or 'alsa_input.pci-' in name:
-                # Determine if PCI device is HDMI/GPU or built-in audio
-                properties = data.get('properties', {})
-                device_desc = properties.get('device.description', '').lower()
-                if any(gpu in device_desc for gpu in ['nvidia', 'amd', 'radeon', 'intel hd', 'hdmi']):
-                    return 'hdmi'
-                else:
-                    return 'builtin'
-            if 'bluez' in name or 'bluetooth' in name:
-                return 'bluetooth'
-
-            # Traditional PulseAudio module name patterns
-            if any(term in name for term in ['usb', 'usb-audio']):
-                return 'usb'
-            if any(term in name for term in ['bluez', 'bluetooth']):
-                return 'bluetooth'
-            if any(term in name for term in ['hdmi', 'displayport']):
-                return 'hdmi'
-
-            # Check properties
-            properties = data.get('properties', {})
-
-            # USB detection
-            if properties.get('device.bus') == 'usb':
-                return 'usb'
-            if 'usb' in properties.get('device.api', '').lower():
-                return 'usb'
-
-            # Bluetooth detection
-            if properties.get('device.api') == 'bluez5':
-                return 'bluetooth'
-            if 'bluetooth' in properties.get('device.description', '').lower():
-                return 'bluetooth'
-
-            # HDMI/DisplayPort detection
-            if any(term in properties.get('device.description', '').lower()
-                   for term in ['hdmi', 'displayport', 'dp']):
-                return 'hdmi'
-            if 'nvidia' in properties.get('device.description', '').lower():
-                return 'hdmi'  # NVIDIA cards typically provide HDMI audio
-
-            # PCI/Built-in detection
-            if properties.get('device.bus') == 'pci':
-                # Check if it's GPU audio (HDMI) or built-in audio
-                description = properties.get('device.description', '').lower()
-                if any(gpu in description for gpu in ['nvidia', 'amd', 'intel hd', 'radeon']):
-                    return 'hdmi'
-                else:
-                    return 'builtin'
-
-        # Default to built-in for unidentified hardware
-        return 'builtin'
+        """Classify a sink/source/module dict. See utils.device_names."""
+        return detect_device_type(
+            sink_data=sink_data, source_data=source_data, module_data=module_data
+        )
 
     def _categorize_hardware_devices(self, modules, sinks, sources, show_monitors=False):
         """

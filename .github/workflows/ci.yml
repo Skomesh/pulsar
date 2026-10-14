@@ -92,50 +92,71 @@ jobs:
         # invisible to the rest of this workflow. Build for real, install
         # into a clean venv, and import the console script.
         #
-        # KNOWN FAILING as of this commit: the wheel does not contain
-        # src/main.py, so the declared entry point `pulsar = main:main`
-        # cannot resolve after a real install. Fixing that is tracked
-        # separately; until it is fixed this step fails, which is the
-        # point -- it should not be silently merged again.
+        # `set -o pipefail` matters: `pip install build | tee /dev/null`
+        # would otherwise report success when pip failed.
         run: |
           set -euo pipefail
-          pip install build
-          python3 -m build --wheel
+
+          # Install build tooling. If THIS is what fails, say so explicitly
+          # rather than letting a later line report an unrelated cause.
+          if ! pip install --upgrade build; then
+            echo "::error::failed to install the 'build' package"
+            exit 1
+          fi
+
+          # Build, and on failure surface the tail of the log. A bare
+          # "command failed with exit code 1" from `python3 -m build` gives
+          # no clue whether the failure was setuptools, a missing file, or
+          # the entry point being invoked without a display.
+          if ! python3 -m build --wheel > /tmp/build.log 2>&1; then
+            echo "::error::python -m build --wheel failed"
+            echo "----- last 40 lines of /tmp/build.log -----"
+            tail -40 /tmp/build.log
+            echo "------------------------------------------"
+            exit 1
+          fi
+
           WHEEL=$(ls -1 dist/*.whl | head -1)
+          if [ -z "$WHEEL" ]; then
+            echo "::error::build reported success but produced no wheel"
+            ls -la dist/ || true
+            exit 1
+          fi
           echo "built: $WHEEL"
 
           # Inspect the wheel contents without installing. Assert on real
           # payload, not on substrings: a docstring mentioning "presets"
           # would satisfy a naive check and hide the actual defect.
-          python3 -c "
-          import zipfile, sys
-          z = zipfile.ZipFile('$WHEEL')
-          names = z.namelist()
+          python3 - "$WHEEL" <<'PYCHECK'
+          import sys
+          import zipfile
 
+          z = zipfile.ZipFile(sys.argv[1])
+          names = z.namelist()
           errors = []
 
-          entry = [n for n in names if n.endswith('entry_points.txt')]
+          entry = [n for n in names if n.endswith("entry_points.txt")]
           if not entry:
-              errors.append('wheel declares no entry point')
+              errors.append("wheel declares no entry point")
           else:
               print(z.read(entry[0]).decode().strip())
 
           # main.py must be an importable top-level module, or the
           # `pulsar` console script cannot resolve.
-          if not any(n == 'main.py' or n.startswith('main.py') for n in names):
-              errors.append('main.py is not in the wheel, so `pulsar` cannot resolve')
+          if not any(n == "main.py" for n in names):
+              errors.append("main.py is not in the wheel, so `pulsar` cannot resolve")
 
           # The preset data must actually ship as a .json payload.
-          data = [n for n in names if n.endswith('.json')]
+          data = [n for n in names if n.endswith(".json")]
           if not data:
-              errors.append('no preset .json shipped; built-in profiles would be empty')
+              errors.append("no preset .json shipped; built-in profiles would be empty")
           else:
-              print('preset data:', data)
+              print("preset data:", data)
 
           for e in errors:
-              print('::error::' + e)
+              print("::error::" + e)
           sys.exit(1 if errors else 0)
-          "
+          PYCHECK
           echo "wheel contents verified"
 
       - name: Verify install in a clean environment

@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `tests/run_ci_equivalent.sh` for reproducing CI locally.
 
 ### Fixed
+- The "Route to default output?" dialog that appeared after creating a sink or
+  source is gone, along with the loopback it silently created. Routing is now
+  an explicit action on the Manage tab.
+- The App Audio tab's Route-To dropdown and stream tree are rebuilt when the tab
+  is selected, instead of once at startup. Sinks created or connected after
+  launch now appear without a restart, and the current Route-To selection
+  survives the refresh.
 - Bluetooth headsets were classified as `builtin`. The `bluez-` branch tested
   `connection_part.startswith('bluez-')` while nested inside the `alsa_` block,
   which a `bluez_` name never enters.

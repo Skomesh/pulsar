@@ -1468,8 +1468,15 @@ class MainWindow:
         # Hardware first (the user's actual speakers/headphones),
         # then virtual (for monitoring/OBS capture)
         all_outputs = hardware + virtual
+        # Preserve the current selection across a refresh if it still
+        # exists. Resetting to all_outputs[0] every time would silently
+        # discard the user's pick whenever the list is rebuilt — which,
+        # now that this runs on every tab entry, would be on every visit.
+        prior = self.capture_route_var.get()
         self.capture_route_combo.config(values=all_outputs)
-        if all_outputs:
+        if prior and prior in all_outputs:
+            self.capture_route_var.set(prior)
+        elif all_outputs:
             self.capture_route_var.set(all_outputs[0])
         else:
             self.capture_route_var.set("")
@@ -2072,45 +2079,8 @@ class MainWindow:
             self.add_output(f"Created {type_label} device: {name} ({description})")
             self.status_var.set(f"Created {type_label} device: {name}")
             self.refresh_all_views()
-            # For sinks: offer to route to the default output. This is
-            # the common case ("I just created a virtual game sink,
-            # now I want to hear it on my headphones") and removes the
-            # friction of having to manually create a loopback on the
-            # Manage tab.
-            if device_type in ("sink", "both"):
-                self._offer_route_to_default(name)
         else:
             self.add_output(f"Failed to create {type_label} device: {name}")
-
-    def _offer_route_to_default(self, sink_name: str):
-        """After creating a sink, ask the user if they want to route
-        it to the current default output. This is the most common
-        next step ("I want to hear this on my speakers/headphones")
-        and exposing it as a one-click confirmation is much better
-        than expecting the user to find the routing panel."""
-        default = PactlRunner.get_default_sink()
-        if not default:
-            return  # No default sink? Nothing useful to offer.
-        # Don't offer if there's already a loopback from this sink
-        monitor = PactlRunner.monitor_source_for(sink_name)
-        existing = PactlRunner.list_loopbacks()
-        if any(lb.get("source") == monitor for lb in existing):
-            return
-        if messagebox.askyesno(
-            "Route to default output?",
-            f"'{sink_name}' is created. Route it to your default "
-            f"output ('{default}') so you can hear it now?\n\n"
-            f"(You can change routing at any time on the Manage tab.)",
-        ):
-            PactlRunner.create_loopback(
-                sink_name, default,
-                latency_msec=self.get_loopback_latency_ms(),
-                logger=self.add_output,
-            )
-            self.refresh_all_views()
-            self.add_output(
-                f"Routed '{sink_name}' → '{default}'"
-            )
 
     def create_duplex_sink(self):
         """Backward-compatible alias. New code should call create_device()."""
@@ -4356,6 +4326,14 @@ class MainWindow:
         # If switching to Create tab, refresh the placeholder state
         if tab_text == "Create":
             self.refresh_create_tab_state()
+        elif tab_text == "App Audio":
+            # The Route-To combo and the stream tree were populated once at
+            # startup. Sinks that appeared since (one created on the Create
+            # tab, a headset connected, an OBS virtual sink) never showed up
+            # until the app was restarted. Re-scan on entry so both reflect
+            # the server as it is now.
+            self._populate_capture_route_options()
+            self._refresh_capture_tree()
 
     def refresh_create_tab_state(self):
         """Refresh the Create tab state to ensure proper placeholder behavior."""

@@ -210,7 +210,7 @@ jobs:
         # data and no longer tracked -- the check was dead code.
         run: |
           set -euo pipefail
-          for f in src/utils/presets/*.json; do
+          for f in src/pulsar/utils/presets/*.json; do
             python3 -c "import json,sys; json.load(open('$f'))"
             echo "valid: $f"
           done

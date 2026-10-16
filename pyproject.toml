@@ -29,28 +29,30 @@ dev = [
 ]
 
 [project.scripts]
-pulsar = "main:main"
+pulsar = "pulsar.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/Skomesh/pulsar"
 Issues = "https://github.com/Skomesh/pulsar/issues"
 Source = "https://github.com/Skomesh/pulsar"
 
-[tool.setuptools]
-# main.py is a top-level module, not a package, so automatic package
-# discovery skips it -- which left the declared `pulsar = main:main` entry
-# point unresolvable after a real install. Name it explicitly.
-py-modules = ["main"]
-
 [tool.setuptools.packages.find]
+# Only ship the `pulsar` package. Automatic discovery used to also install
+# `utils`, `ui` and `config` as top-level modules, because those were the
+# directory names under src/. That is fine for `pip install` into a venv and
+# actively harmful for a deb or rpm, which drop them into the system
+# dist-packages where they collide with every other package that ships a
+# `utils` or `config` module -- and whichever loses the import race silently
+# breaks the other program.
 where = ["src"]
+include = ["pulsar*"]
 
 [tool.setuptools.package-data]
 # builtin_profiles.json is read at runtime by utils/profile_manager.py.
 # Without this the wheel ships no preset data and the app silently starts
 # with an empty profile list. Data lives in the package dir so it resolves
 # from an installed wheel, not just a source checkout.
-utils = ["presets/*.json"]
+"pulsar.utils" = ["presets/*.json"]
 
 [tool.ruff]
 line-length = 100

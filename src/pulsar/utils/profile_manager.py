@@ -59,8 +59,8 @@ import shutil
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from utils.pactl_runner import PactlRunner
-from utils.paths import legacy_presets_dir, user_presets_dir
+from pulsar.utils.pactl_runner import PactlRunner
+from pulsar.utils.paths import legacy_presets_dir, user_presets_dir
 
 CURRENT_SCHEMA_VERSION = 2
 
@@ -200,7 +200,7 @@ class ProfileManager:
         of the same name.
         """
         # Resolve relative to THIS FILE, one level up: the data is shipped
-        # inside the package (src/utils/presets/), so the path is identical
+        # inside the package (src/pulsar/utils/presets/), so the path is identical
         # in a source checkout and in site-packages after a wheel install.
         #
         # The previous code walked two levels up to the project root, which

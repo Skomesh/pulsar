@@ -40,7 +40,7 @@ Handles interaction with PulseAudio through `pactl` commands:
 
 From the project root directory:
 ```bash
-python3 src/main.py
+python3 -m pulsar
 ```
 
 ## Contributing

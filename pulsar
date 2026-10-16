@@ -1,5 +1,13 @@
 #!/bin/bash
 
-# Launch Pulsar from its directory
-cd "$(dirname "$(readlink -f "$0")")"
-python3 src/main.py
+# Launch Pulsar from its directory.
+#
+# The package lives under src/pulsar, so the repo root has to be importable
+# for `python3 -m pulsar` to resolve. PYTHONPATH is set explicitly because
+# the current directory is not on sys.path when running a module with -m.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+export PYTHONPATH="$HERE/src${PYTHONPATH:+:$PYTHONPATH}"
+
+exec python3 -m pulsar "$@"

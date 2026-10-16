@@ -9,7 +9,7 @@ output so we don't depend on a specific system's exact profile set.
 import unittest
 from unittest import mock
 
-from utils.pactl_runner import PactlRunner
+from pulsar.utils.pactl_runner import PactlRunner
 
 
 def pactl_available() -> bool:
@@ -101,7 +101,7 @@ Card #51
 \tPorts:
 """
 
-    @mock.patch("utils.pactl_runner.PactlRunner.run_command")
+    @mock.patch("pulsar.utils.pactl_runner.PactlRunner.run_command")
     def test_parses_two_cards(self, mock_run):
         # Both list cards calls return the same mock data
         mock_run.return_value = (self.MOCK_OUTPUT, 0)
@@ -130,7 +130,7 @@ Card #51
         self.assertEqual(c1["active_profile"], "off")
         self.assertEqual(len(c1["profiles"]), 1)
 
-    @mock.patch("utils.pactl_runner.PactlRunner.run_command")
+    @mock.patch("pulsar.utils.pactl_runner.PactlRunner.run_command")
     def test_empty_when_pactl_fails(self, mock_run):
         mock_run.return_value = ("", 1)
         self.assertEqual(PactlRunner.list_cards(), [])

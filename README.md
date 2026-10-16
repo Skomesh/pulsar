@@ -50,7 +50,7 @@ pulsar        # or run from application menu
 To run without installing:
 
 ```bash
-python3 src/main.py
+python3 -m pulsar
 ```
 
 ## Syncing with upstream

@@ -16,13 +16,13 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from utils.paths import (
+from pulsar.utils.paths import (
     legacy_presets_dir,
     user_data_dir,
     user_presets_dir,
 )
-from utils.preset_manager import PresetManager
-from utils.profile_manager import ProfileManager
+from pulsar.utils.preset_manager import PresetManager
+from pulsar.utils.profile_manager import ProfileManager
 
 
 class _XDGTestBase(unittest.TestCase):
@@ -70,7 +70,7 @@ class TestUserDataDir(_XDGTestBase):
         Reads of bundled presets still need to work; only writes fail, and
         they fail with a real path in the error.
         """
-        with mock.patch("utils.paths.Path.mkdir", side_effect=OSError("read-only")):
+        with mock.patch("pulsar.utils.paths.Path.mkdir", side_effect=OSError("read-only")):
             self.assertEqual(user_data_dir(), Path(self.xdg) / "pulsar")
 
 

@@ -6,7 +6,7 @@ End-to-end tests that drive a real sink/source and verify round-trips.
 
 import unittest
 
-from utils.pactl_runner import PactlRunner
+from pulsar.utils.pactl_runner import PactlRunner
 
 
 def pactl_available() -> bool:

@@ -9,7 +9,7 @@ import shutil
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from utils.paths import legacy_presets_dir, user_presets_dir
+from pulsar.utils.paths import legacy_presets_dir, user_presets_dir
 
 #: PresetManager and ProfileManager are different schemas that used to share
 #: this filename. They now have their own files so migrating one cannot

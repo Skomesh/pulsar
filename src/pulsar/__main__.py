@@ -1,24 +1,21 @@
 #!/usr/bin/env python3
 """
-PulseAudio Control GUI (pactl-gui)
-Main application entry point
+Pulsar - graphical audio routing manager for PulseAudio/PipeWire.
+Main application entry point.
 """
 
-import os
+import shutil
 import sys
 import tkinter as tk
 
-# Ensure we can import our modules
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-# Import our UI components
-from ui.main_window import MainWindow
+from pulsar.ui.main_window import MainWindow
 
 
 def main():
     """Main application entry point."""
-    # Check if pactl is available
-    if os.system("which pactl > /dev/null") != 0:
+    # Check if pactl is available. Use shutil.which rather than os.system:
+    # a shell spawn per launch is slow and the "which" output was discarded.
+    if shutil.which("pactl") is None:
         print("Error: PulseAudio command-line utility (pactl) not found!")
         print("Please install PulseAudio utilities package:")
         print("  Debian/Ubuntu: sudo apt-get install pulseaudio-utils")
@@ -32,6 +29,7 @@ def main():
 
     # Start the main application loop
     root.mainloop()
+
 
 if __name__ == "__main__":
     main()

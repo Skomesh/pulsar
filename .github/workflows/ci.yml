@@ -207,7 +207,7 @@ jobs:
           cd /tmp
           /tmp/smoke/bin/python -c "
           import tempfile
-          from utils.profile_manager import ProfileManager
+          from pulsar.utils.profile_manager import ProfileManager
           pm = ProfileManager(presets_dir=tempfile.mkdtemp())
           n = len(pm._load_builtin())
           assert n > 0, 'installed package loaded ZERO built-in profiles'

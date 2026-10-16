@@ -1,0 +1,147 @@
+#!/usr/bin/make -f
+#
+# Pulsar -- Debian packaging rules.
+#
+# WHY pybuild + dh_python3, AND NOT `pip install`:
+#
+# `pip install --root=debian/pulsar` would also work and is one line, but it
+# brings pip itself into Build-Depends, and it silently ignores Debian's
+# install layout. dh_python3 is the route Debian policy expects for a Python
+# module shipped in dist-packages, and it does three things pip does not:
+#
+#   * it byte-compiles the installed files at build time with the *target*
+#     interpreter and drops the results in the package, instead of leaving
+#     the first `import pulsar` after install to pay for compilation as root
+#     in /usr/lib/python3/dist-packages;
+#   * it generates the ${python3:Depends} substitution from the metadata, and
+#     it recognises a package that is NOT named python3-something as long as
+#     ${python3:Depends} appears in Depends (which is why control has it);
+#   * it installs to /usr/lib/python3/dist-packages, the Debian-specific
+#     location, not to a site-packages path that the system interpreter does
+#     not search by default.
+#
+# So: pybuild (from dh-python) is the *buildsystem*; dh_python3 (same source
+# package, added by `--with python3`) is the *dependency/byte-compile helper*.
+# They are two halves of one tool and are used together.
+#
+# Note the build-dependency is `dh-python`, not `pybuild`: pybuild itself
+# ships inside the dh-python source package, so listing them separately would
+# be wrong. `pybuild-plugin-pyproject` is a separate binary package and IS
+# listed separately -- it provides the PEP 517 pyproject.toml plugin that
+# understands this project's build backend (setuptools.build_meta). Without
+# it, pybuild autodetects the legacy distutils plugin and fails on the
+# pyproject-only layout. debhelper's own python_distutils buildsystem is NOT
+# used here; it requires a setup.py, which this project does not have.
+#
+# WHY PYBUILD_NAME IS DELIBERATELY NOT SET:
+#
+# Setting PYBUILD_NAME=pulsar looks harmless and is what the pybuild(1)
+# examples show, but it is wrong for this package. Reading pybuild's own
+# source: when `name` is set and no explicit destdir option is in play,
+# destdir is rewritten to "debian/" + suggest_pkg_name(name), and
+# suggest_pkg_name("pulsar") is "python3-pulsar". The payload would be
+# installed into debian/python3-pulsar/ while the binary package declared in
+# debian/control is called `pulsar` -- the files would be silently dropped
+# from the .deb. debhelper already passes the correct --dest-dir
+# (debian/pulsar, because this is a single-binary compat-13 package), so the
+# correct fix is to set nothing at all.
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+%:
+	dh $@ --with python3 --buildsystem=pybuild
+
+# Nothing in the wheel needs a display, an audio server, or a network to be
+# imported, but the upstream test suite is not run here. tests/test_volume_
+# helpers.py::test_source_volume_roundtrip drives a real pactl sink and fails
+# in a build chroot with no PulseAudio server, and several modules import
+# tkinter at module scope, which needs python3-tk plus an X server to import
+# at all. Running a suite that cannot pass in the build environment would
+# make every build fail for a reason unrelated to the package. Enable it once
+# those tests are marked as requiring a live server:
+#
+#	Build-Depends: ..., python3-pytest, python3-tk
+#	override_dh_auto_test:
+#		dh_auto_test
+override_dh_auto_test:
+	@echo "debian/rules: skipping the upstream test suite (needs a live"
+	@echo "  PulseAudio server and an X server; see the comment above)."
+
+override_dh_auto_clean:
+	dh_auto_clean
+	# setuptools writes this into the source tree during the build; leaving it
+	# behind makes the next `git status` noisy and can make a rebuild pick up
+	# stale metadata.
+	rm -rf src/pulsar.egg-info
+
+override_dh_auto_install:
+	dh_auto_install
+	#
+	# Everything below is done here rather than through debian/pulsar.install
+	# because dh_install cannot do either of these things:
+	#
+	#   * it cannot rename a file. The icon set is authored as
+	#     assets/icons/pulsar-16.png etc., but the hicolor theme layout
+	#     requires each one to be named pulsar.png inside its own
+	#     <size>x<size>/apps directory. That is a rename, so it has to be an
+	#     install(1) call rather than a .install line.
+	#
+	#   * it cannot rewrite file contents. pulsar.desktop ships from the
+	#     source tree with Exec=PLACEHOLDER_EXEC_PATH, which install.sh
+	#     substitutes. A distribution package must ship a desktop file that
+	#     is already correct -- a menu entry pointing at
+	#     PLACEHOLDER_EXEC_PATH is a broken launcher for every user who
+	#     installs from the .deb rather than the git checkout. So the
+	#     placeholder is replaced here with the path the console script
+	#     actually gets (/usr/bin/pulsar, from the [project.scripts] entry
+	#     point in pyproject.toml).
+	#
+	# NOTE ON /usr/share/pulsar: deliberately not created, and nothing below
+	# writes under /usr/share/pulsar. User data (saved presets and profiles)
+	# resolves to $XDG_DATA_HOME/pulsar/presets, i.e. ~/.local/share on a
+	# default install -- see src/pulsar/utils/paths.py. Installing a presets
+	# directory into /usr would give the package a path the application never
+	# reads, and would tempt someone into making it writable, which would
+	# then break every future release's ability to ship new built-in presets.
+	# The built-in profiles ship inside the wheel as package data
+	# (pulsar/utils/presets/builtin_profiles.json) and are read-only.
+	sed -e 's|PLACEHOLDER_EXEC_PATH|/usr/bin/pulsar|g' pulsar.desktop \
+		> debian/pulsar/usr/share/applications/pulsar.desktop
+	chmod 0644 debian/pulsar/usr/share/applications/pulsar.desktop
+	# Install the README next to the manual page-less binary so the
+	# documentation the .deb ships is the one upstream wrote.
+	install -D -m 0644 README.md debian/pulsar/usr/share/doc/pulsar/README.md
+	install -D -m 0644 NOTICE debian/pulsar/usr/share/doc/pulsar/NOTICE
+	# Icons. PNGs go to the fixed-size hicolor directories, the SVG to
+	# scalable/, all named pulsar.png / pulsar.svg as the theme lookup
+	# requires.
+	for size in 16 24 32 48 64 128 256 512; do \
+		install -D -m 0644 assets/icons/pulsar-$$size.png \
+			debian/pulsar/usr/share/icons/hicolor/$${size}x$${size}/apps/pulsar.png; \
+	done
+	install -D -m 0644 assets/icons/pulsar.svg \
+		debian/pulsar/usr/share/icons/hicolor/scalable/apps/pulsar.svg
+
+# The upstream single source of truth for the version is pyproject.toml.
+# debian/changelog has to carry the same number, because dpkg takes the
+# version of the .deb from the changelog and nowhere else. Two copies of one
+# fact drift the moment someone bumps only one of them.
+#
+# The release procedure is therefore: bump `version` in pyproject.toml, then
+# add the matching top entry to debian/changelog with `dch -v <version>`. The
+# check below turns a missed changelog bump into a loud build failure instead
+# of a .deb whose filename and metadata disagree with the wheel inside it.
+override_dh_auto_build:
+	@upstream=$$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' pyproject.toml | head -1); \
+	debian=$$(dpkg-parsechangelog -SVersion | sed 's/^[0-9]*://; s/-.*$$//'); \
+	if [ -z "$$upstream" ]; then \
+		echo "E: could not read version from pyproject.toml" >&2; exit 1; \
+	fi; \
+	if [ "$$upstream" != "$$debian" ]; then \
+		echo "E: version mismatch: pyproject.toml says '$$upstream'," >&2; \
+		echo "   debian/changelog says '$$debian'." >&2; \
+		echo "   Bump pyproject.toml and add a changelog entry (dch -v $$upstream)." >&2; \
+		exit 1; \
+	fi; \
+	echo "debian/rules: version $$upstream matches debian/changelog"; \
+	dh_auto_build

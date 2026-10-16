@@ -1,0 +1,21 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Pulsar
+GenericName=Audio Routing
+Comment=Graphical audio routing manager for PulseAudio and PipeWire
+Exec=pulsar
+Icon=pulsar
+Terminal=false
+Categories=AudioVideo;Audio;Settings;Mixer;
+Keywords=sound;audio;volume;pulseaudio;pipewire;routing;loopback;mixer;streamer;
+StartupNotify=true
+X-KDE-SubstituteUID=false
+X-KDE-StartupNotify=true
+
+# AppImage copy of the desktop entry. Unlike the template at the repo root,
+# Exec is the plain command `pulsar`: the AppImage runtime puts the AppDir's
+# usr/bin on PATH before the desktop environment execs this file, and
+# usr/bin/pulsar is the launcher inside the bundle. Icon=pulsar resolves
+# against usr/share/icons/hicolor and against the icon embedded in the
+# AppImage header.

@@ -1,0 +1,68 @@
+#!/bin/sh
+# usr/bin/pulsar -- the Pulsar launcher inside the AppImage's AppDir.
+#
+# AppRun (packaging/appimage/AppRun) is the entry point the AppImage runtime
+# invokes; this file is the equivalent entry for the case where something
+# execs `pulsar` directly -- the packaged pulsar.desktop does exactly that
+# (Exec=pulsar), relying on the AppImage runtime having put the AppDir's
+# usr/bin on PATH. Both routes land on the same bundled interpreter with the
+# same environment; this one resolves the AppDir from its own location
+# (usr/bin/pulsar -> ../../ = AppDir) rather than from argv[0] being AppRun.
+#
+# Kept as a shell script rather than the wheel's generated console script
+# because a generated console script starts with
+#     #!/some/build/venv/bin/python3
+# and that interpreter does not exist once the bundle is moved to a user's
+# machine.
+
+set -eu
+
+# Resolve symlinks to find the AppDir without depending on the working
+# directory: this file lives at <AppDir>/usr/bin/pulsar.
+self=$0
+while [ -L "$self" ]; do
+    link=$(readlink "$self")
+    case $link in
+        /*) self=$link ;;
+        *)  self=${self%/*}/$link ;;
+    esac
+done
+bindir=$(cd "${self%/*}" && pwd -P)
+APPDIR=$(cd "$bindir/../.." && pwd -P)
+
+PYTHON=$APPDIR/usr/bin/python3
+if [ ! -x "$PYTHON" ]; then
+    printf 'pulsar: bundled interpreter missing: %s (AppImage is corrupt?)\n' "$PYTHON" >&2
+    exit 1
+fi
+
+SITE_PACKAGES=
+for candidate in "$APPDIR"/usr/lib/python3.*/site-packages; do
+    [ -d "$candidate" ] || continue
+    if [ -n "$SITE_PACKAGES" ]; then
+        printf 'pulsar: more than one site-packages in %s/usr/lib\n' "$APPDIR" >&2
+        exit 1
+    fi
+    SITE_PACKAGES=$candidate
+done
+if [ -z "$SITE_PACKAGES" ]; then
+    printf 'pulsar: bundled site-packages not found under %s/usr/lib\n' "$APPDIR" >&2
+    exit 1
+fi
+
+PYTHONHOME="$APPDIR/usr"
+PYTHONPATH="$SITE_PACKAGES"
+PYTHONNOUSERSITE=1
+# Drop the current directory from sys.path[0]; `python -m` would otherwise let
+# a `pulsar.py` next to the launcher shadow the bundled package. Ignored by
+# Pythons older than 3.11. See AppRun for the longer explanation.
+PYTHONSAFEPATH=1
+PYTHONDONTWRITEBYTECODE=1
+export PYTHONHOME PYTHONPATH PYTHONNOUSERSITE PYTHONSAFEPATH PYTHONDONTWRITEBYTECODE
+
+# Bundled usr/bin first, host directories forced in so pactl / pw-dump /
+# pw-top / pw-record -- which are deliberately NOT bundled -- still resolve.
+PATH="$APPDIR/usr/bin:/usr/local/bin:/usr/bin:/bin${PATH:+:$PATH}"
+export PATH
+
+exec "$PYTHON" -m pulsar "$@"

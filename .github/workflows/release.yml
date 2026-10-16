@@ -2,14 +2,15 @@ name: Release
 
 # Builds every distributable format and attaches them to a GitHub release.
 #
-# Triggered by pushing a v* tag. Nothing here publishes to the snap store or
-# Flathub: those need accounts that do not exist yet, and silently failing
-# part-way through a release is worse than shipping the artifacts and
-# uploading them by hand.
+# Triggered by pushing a v* tag. Every artifact ends up as a file on the
+# GitHub release and nowhere else: there is deliberately no publishing to the
+# snap store, Flathub, an apt repository or a yum repository. Users install
+# by downloading the file. That keeps the release path free of store
+# credentials and free of half-published states -- if the build breaks, the
+# release has no artifacts rather than some of them.
 #
-# What IS automated: the build of each format and its upload to the release.
-# The .deb and .rpm are also offered to apt/yum repositories, but only when
-# the matching secrets exist -- see the guarded steps below.
+# The recipes are still written the way each store expects, so uploading by
+# hand later is a matter of `snapcraft upload` / a Flathub PR, not a rewrite.
 
 on:
   push:
@@ -178,9 +179,12 @@ jobs:
         run: |
           echo "### Release ${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Artifacts are attached to the GitHub release." >> "$GITHUB_STEP_SUMMARY"
+          echo "Artifacts attached to this release:" >> "$GITHUB_STEP_SUMMARY"
+          echo "- AppImage (run the file; no install)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- deb (\`sudo dpkg -i\`)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- rpm (\`sudo dnf install\`)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- snap (\`sudo snap install --dangerous\`)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- flatpak (\`flatpak install\`)" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "### Not automated" >> "$GITHUB_STEP_SUMMARY"
-          echo "- snap store upload (needs a snapcraft store name)" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Flathub submission (needs a Flathub account)" >> "$GITHUB_STEP_SUMMARY"
-          echo "- apt/yum repository publishing (needs repo credentials)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Nothing is published to the snap store, Flathub, or any apt/yum" >> "$GITHUB_STEP_SUMMARY"
+          echo "repository. Distribution is by downloading the file." >> "$GITHUB_STEP_SUMMARY"

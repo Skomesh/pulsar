@@ -1,0 +1,57 @@
+Source: pulsar
+Section: sound
+Priority: optional
+Maintainer: Skomesh <skomesh@users.noreply.github.com>
+Build-Depends:
+ debhelper-compat (= 13),
+ dh-python,
+ pybuild-plugin-pyproject,
+ python3-all (>= 3.8~),
+ python3-setuptools,
+ python3-wheel,
+ python3-build,
+ python3-installer,
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://github.com/Skomesh/pulsar
+Vcs-Browser: https://github.com/Skomesh/pulsar
+Vcs-Git: https://github.com/Skomesh/pulsar.git
+
+Package: pulsar
+Architecture: all
+# pipewire-bin, NOT pipewire. On Debian/Ubuntu the `pipewire` package ships
+# only /usr/lib/systemd/user/pipewire.{service,socket}; the pw-dump, pw-top and
+# pw-record binaries that this app actually execs live in `pipewire-bin`.
+# Depending on `pipewire` happens to pull it in transitively but drags in
+# systemd and sysusers too, and obscures what is genuinely required.
+# Verified locally: `dpkg -S $(command -v pw-dump)` -> pipewire-bin.
+# (Fedora names the same set `pipewire-utils`; see packaging/pulsar.spec.)
+Depends:
+ ${misc:Depends},
+ ${python3:Depends},
+ python3 (>= 3.8),
+ python3-tk,
+ pulseaudio-utils,
+ pipewire-bin,
+Description: graphical audio routing manager for PulseAudio and PipeWire
+ Pulsar is a Tkinter desktop application for routing audio between
+ applications, sinks and sources on a PulseAudio or PipeWire server. It can
+ list and inspect playback and capture streams, move an application to a
+ different output exclusively (so its audio leaves the previous device rather
+ than being duplicated there), create and connect sinks, and save routing
+ setups as named presets and profiles.
+ .
+ Pulsar shells out to the audio server's own command line tools rather than
+ linking against a client library: pactl from pulseaudio-utils for stream and
+ sink control, and pw-dump, pw-top and pw-record from pipewire for server
+ introspection and diagnostics. On Debian those are provided by the
+ pulseaudio-utils and pipewire packages, which are therefore hard dependencies
+ rather than suggestions.
+ .
+ python3-tk is a hard dependency because tkinter is imported at start-up, not
+ lazily: without it the window never opens.
+ .
+ This package installs the Python module into the system dist-packages. That
+ is safe only because the wheel ships exactly one top-level package, pulsar.
+ Earlier versions also installed utils, ui and config as top-level modules,
+ which collide with unrelated system packages in dist-packages.

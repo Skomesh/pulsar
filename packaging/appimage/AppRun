@@ -1,0 +1,129 @@
+#!/bin/sh
+# AppRun -- Pulsar AppImage launcher.
+#
+# Contract this file keeps, in order of importance:
+#
+#   1. Nothing here depends on the current working directory. An AppImage is
+#      mounted at a fresh /tmp/.mount_pulsarXXXXXX on every run, and the
+#      directory the user happened to double-click from is irrelevant. Every
+#      path below is derived from this script's own location.
+#
+#   2. The bundled Python runs against the bundled stdlib and the bundled
+#      site-packages -- never the host's. PYTHONHOME pins the prefix to the
+#      AppDir so a distro python copied into usr/ finds its own stdlib, and
+#      PYTHONPATH pins the site-packages that hold the `pulsar` package
+#      installed from the wheel. PYTHONNOUSERSITE drops ~/.local from the
+#      import path, which would otherwise let a user's own `pulsar` or a
+#      stale module shadow the bundled one.
+#
+#   3. Host binaries stay reachable. The AppDir's usr/bin is prepended (so the
+#      bundled python3 wins) and the standard host directories are guaranteed
+#      to follow it. pactl, pw-dump, pw-top and pw-record are NOT bundled --
+#      they link against the host's libpulse/libpipewire and would be broken
+#      copies if they were -- so they must resolve to /usr/bin/pactl & co.
+#
+# scripts/build_appimage.sh stages the AppDir this script expects:
+#
+#   AppDir/AppRun                                  <- this file
+#   AppDir/pulsar.desktop                          <- packaging/appimage/pulsar.desktop
+#   AppDir/usr/bin/python3                         <- bundled interpreter (real ELF)
+#   AppDir/usr/lib/python3.X/site-packages/pulsar  <- from pulsar-*.whl
+#   AppDir/usr/share/icons/hicolor/{256x256,scalable}/apps/pulsar.*
+
+# `set -u` is deliberate; an unset variable here is a bug, not a default.
+set -eu
+
+die() {
+    printf 'AppRun: %s\n' "$1" >&2
+    exit 1
+}
+
+# --- 1. locate the AppDir -----------------------------------------------
+# Resolve $0 through any symlinks, then absolute-ise it. This is the only
+# `cd` in the file and it moves nowhere near the user's data: it just makes
+# the script's own directory absolute so $APPDIR is stable no matter what
+# argv[0] was relative to.
+self=$0
+while [ -L "$self" ]; do
+    link=$(readlink "$self")
+    case $link in
+        /*) self=$link ;;
+        *)  self=${self%/*}/$link ;;
+    esac
+done
+APPDIR=$(cd "${self%/*}" && pwd -P)
+export APPDIR
+
+# --- 2. locate the bundled interpreter ----------------------------------
+PYTHON=$APPDIR/usr/bin/python3
+[ -x "$PYTHON" ] || die "bundled interpreter missing: $PYTHON (AppImage is corrupt?)"
+
+# --- 3. locate the bundled site-packages --------------------------------
+# The minor version is not hardcoded: the build script decides which CPython
+# it bundles (it may be a python-build-standalone release newer than the one
+# this file was written against). Exactly one site-packages directory is
+# expected, and two means a broken AppDir rather than a tie to break
+# silently in the wrong order.
+SITE_PACKAGES=
+for candidate in "$APPDIR"/usr/lib/python3.*/site-packages; do
+    [ -d "$candidate" ] || continue
+    [ -z "$SITE_PACKAGES" ] || die \
+        "more than one site-packages in $APPDIR/usr/lib: $SITE_PACKAGES and $candidate"
+    SITE_PACKAGES=$candidate
+done
+[ -n "$SITE_PACKAGES" ] || die "bundled site-packages not found under $APPDIR/usr/lib"
+export SITE_PACKAGES
+
+# --- 4. hermetic interpreter environment --------------------------------
+export PYTHONHOME="$APPDIR/usr"
+export PYTHONPATH="$SITE_PACKAGES"
+export PYTHONNOUSERSITE=1
+
+# `python3 -m pkg` normally puts the *current directory* on sys.path[0].
+# Inside an AppImage the current directory is whatever the user happened to
+# double-click from, so a `pulsar.py` or `pulsar/` sitting there would shadow
+# the bundled package and the app would run someone else's code. PYTHONSAFEPATH
+# (equivalently `python -P`) removes that entry. Pythons older than 3.11 do
+# not know the variable and ignore it, which degrades to the old behaviour
+# rather than failing.
+export PYTHONSAFEPATH=1
+
+# The AppDir is mounted read-only over FUSE on most hosts. Without this,
+# every import would attempt (and usually fail) to write __pycache__ into the
+# mount, which is wasted time on every launch and, on hosts that do allow it,
+# would leave a squashed filesystem dirty for the next user.
+export PYTHONDONTWRITEBYTECODE=1
+
+# Host-first PATH, AppDir-last-for-everything-else. The bundled usr/bin goes
+# in front so `python3` means the bundled one; /usr/local/bin, /usr/bin and
+# /bin are then forced into PATH (a stripped-down desktop session may not have
+# them) so pactl and friends resolve. The tail preserves whatever the session
+# already had for user-installed helpers.
+export PATH="$APPDIR/usr/bin:/usr/local/bin:/usr/bin:/bin${PATH:+:$PATH}"
+
+# --- 5. debug hook ------------------------------------------------------
+# PULSAR_APPRUN_PRINT_ENV=1 prints the resolved environment and exits without
+# starting the GUI. An AppImage gives you no terminal to inspect it from, so
+# this is the only way to answer "why can't it find my module / my pactl",
+# and it is also what scripts/build_appimage.sh asserts against. Off by
+# default; it changes nothing about a normal launch.
+if [ "${PULSAR_APPRUN_PRINT_ENV:-0}" = 1 ]; then
+    printf 'APPDIR=%s\n' "$APPDIR"
+    printf 'PYTHONHOME=%s\n' "$PYTHONHOME"
+    printf 'PYTHONPATH=%s\n' "$PYTHONPATH"
+    printf 'PYTHONNOUSERSITE=%s\n' "$PYTHONNOUSERSITE"
+    printf 'PYTHONSAFEPATH=%s\n' "$PYTHONSAFEPATH"
+    printf 'PYTHONDONTWRITEBYTECODE=%s\n' "$PYTHONDONTWRITEBYTECODE"
+    printf 'PYTHON=%s\n' "$PYTHON"
+    printf 'SITE_PACKAGES=%s\n' "$SITE_PACKAGES"
+    printf 'PATH=%s\n' "$PATH"
+    printf 'CWD=%s\n' "$(pwd)"
+    exit 0
+fi
+
+# --- 6. run -------------------------------------------------------------
+# `python3 -m pulsar` rather than the wheel's console script: the console
+# script is a #! line pointing at a build-machine path that does not exist
+# inside the AppImage. The module entry point is the same code
+# (pulsar.__main__:main) and needs no shebang.
+exec "$PYTHON" -m pulsar "$@"

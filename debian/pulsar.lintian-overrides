@@ -1,0 +1,23 @@
+# Lintian overrides for pulsar.
+#
+# Deliberately minimal. One override, justified below, and nothing else.
+# Blanket-suppressing tags ("extra-license-file", "unusual-install-location",
+# "embedded-library") is how lintian stops being useful: it reports a package
+# with a real problem as clean, and the next person to touch the packaging has
+# no signal left. Any tag that shows up later should be read and either fixed
+# or justified individually, not silenced by pattern.
+#
+# NOTE: lintian is not installed on the machine these files were written on, so
+# this file has not been run against an actual build. The one tag below is
+# chosen because it is guaranteed by the file layout rather than because lintian
+# was observed to emit it. Re-check with `lintian ../pulsar_*.deb` after a real
+# dpkg-buildpackage and delete this file if it turns out to be unnecessary.
+
+# pulsar ships /usr/bin/pulsar (the console script generated from the
+# [project.scripts] entry point) and no man page. This is a Tkinter GUI
+# application: it takes no command line arguments, has no subcommands and no
+# configuration flags, so there is nothing a man page would usefully document.
+# User-facing documentation is the README, installed at
+# /usr/share/doc/pulsar/README.md, and the .desktop entry's Name/Comment/Keywords.
+# Writing a man page to silence the tag would be an empty stub.
+no-manual-page

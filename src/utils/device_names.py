@@ -17,7 +17,13 @@ from typing import Any, Dict, Optional
 
 #: Substrings in ``device.description`` that indicate the PCI audio device is
 #: actually a GPU's HDMI output rather than onboard analog audio.
-GPU_HINTS = ("nvidia", "amd", "radeon", "intel hd")
+#:
+#: This list must stay identical to the one ``detect_device_type`` uses on the
+#: alsa_*_pci- name branch. When they diverged, a card whose description named
+#: no GPU vendor ("HDMI Audio Device") was filed as 'builtin' by the UI path
+#: and 'hdmi' by the module path -- the same classifier split that put
+#: bluetooth headsets under Built-in.
+GPU_HINTS = ("nvidia", "amd", "radeon", "intel hd", "hdmi")
 
 
 def classify_device_name(

@@ -63,7 +63,7 @@ CI:
 
 It deliberately leaves `gdbus` visible, because `ubuntu-latest` ships it
 (via `libglib2.0-bin`) and the portal tests need it present. Hiding it invents
-failures CI does not have. A matching run reports `75 passed, 53 skipped` and
+failures CI does not have. A matching run reports `76 passed, 53 skipped` and
 no failures.
 
 Extra arguments are forwarded to pytest, and a test target replaces the
@@ -73,12 +73,10 @@ default `tests/`:
 ./tests/run_ci_equivalent.sh -q tests/test_device_names.py
 ```
 
-Treat this as the command of record for a clean tree. As of this commit it
-reports `8 failed, 55 passed, 53 skipped`; the 8 failures are the pre-existing
-`gdbus` portal-capture tests, not something you introduced. If your change
-raises the pass count, that's the change working. The "Running tests" section
-above still advertises `make test`; use the runner when you want CI's answer,
-and say so in your PR description if the two disagree.
+Treat this as the command of record for a clean tree. If your change raises
+the pass count, that's the change working. The "Running tests" section above
+still advertises `make test`; use the runner when you want CI's answer, and say
+so in your PR description if the two disagree.
 
 ## Code style
 

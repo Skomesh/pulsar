@@ -220,6 +220,25 @@ class TestClassifiersAgree(unittest.TestCase):
             detect_device_type(sink_data=data),
         )
 
+    def test_pci_without_vendor_in_description_agrees(self):
+        """A GPU whose description names no vendor still has to agree.
+
+        'HDMI Audio Device' contains no vendor hint, so GPU_HINTS was the
+        only thing standing between the two classifiers: it lacked 'hdmi'
+        while detect_device_type's list had it, and the card was filed as
+        'builtin' by the UI path and 'hdmi' by the module path. Same split
+        the bluetooth bug had, one branch over.
+        """
+        name = "alsa_output.pci-0000_01_00.1.hdmi-stereo"
+        data = {
+            "name": name,
+            "properties": {"device.description": "HDMI Audio Device"},
+        }
+        self.assertEqual(
+            classify_device_name(name, data)["device_type"],
+            detect_device_type(sink_data=data),
+        )
+
 
 class TestMainWindowBluetoothRegression(unittest.TestCase):
     """The bug the branch exists to fix lived in MainWindow, not in the

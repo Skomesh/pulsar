@@ -1411,6 +1411,23 @@ class MainWindow:
             command=self._on_capture_route_clicked, state="disabled",
         )
         self.capture_route_button.pack(side=tk.LEFT, padx=5)
+        # Exclusive routing: move the app's stream itself, so its audio stops
+        # on the previous device instead of being duplicated onto this one.
+        self.capture_exclusive_button = ttk.Button(
+            route_row, text="Output Only Here", width=16,
+            command=self._on_capture_exclusive_clicked, state="disabled",
+        )
+        self.capture_exclusive_button.pack(side=tk.LEFT, padx=5)
+        ttk.Label(
+            route_frame,
+            text=(
+                "Route Here duplicates this app's audio onto the chosen "
+                "output and leaves it on its current one too. Output Only "
+                "Here moves the stream itself, so it is heard on the chosen "
+                "output only."
+            ),
+            wraplength=700,
+        ).pack(anchor=tk.W, pady=(5, 0))
         # Populate output list now (doesn't depend on selection)
         self._populate_capture_route_options()
 
@@ -1615,6 +1632,125 @@ class MainWindow:
                 "Route failed", f"Could not create loopback to '{target}'."
             )
 
+    def _selected_capture_stream(self):
+        """Return (app_label, node_dict) for the selected tree row, or None.
+
+        The tree stores what it displays; ``_capture_nodes`` is the parallel
+        list that discovery filled in, and the row index is the index into it.
+        """
+        sel = self.capture_tree.selection()
+        if not sel:
+            return None
+        values = self.capture_tree.item(sel[0])["values"]
+        if not values:
+            return None
+        _, app_str, _, _ = values
+        if not getattr(self, "_capture_nodes", None):
+            return None
+        try:
+            idx = int(self.capture_tree.index(sel[0]))
+        except (ValueError, tk.TclError):
+            return None
+        if not (0 <= idx < len(self._capture_nodes)):
+            return None
+        return app_str, self._capture_nodes[idx]
+
+    def _on_capture_exclusive_clicked(self):
+        """Move the selected app's stream so it plays on the chosen output only.
+
+        Unlike _on_capture_route_clicked this does not loopback. It moves the
+        stream itself with `pactl move-sink-input`, so the audio stops on
+        whatever device it was using before. That is what "only output to this
+        device" means; the loopback path can only duplicate.
+
+        The sink-input index is looked up at click time rather than cached at
+        refresh time. PA recycles those indices, so a cached one can name a
+        different stream by the time the button is pressed.
+        """
+        picked = self._selected_capture_stream()
+        if not picked:
+            messagebox.showinfo(
+                "Output only here", "Select a stream first."
+            )
+            return
+        app_str, node = picked
+
+        target = self.capture_route_var.get()
+        if target.endswith("  [virtual]"):
+            target = target.replace("  [virtual]", "")
+        if not target:
+            messagebox.showinfo(
+                "Output only here", "No output selected. Pick one from the dropdown."
+            )
+            return
+
+        sinks = {s.get("name", "") for s in PactlRunner.list_sinks(logger=self.add_output)}
+        if target not in sinks:
+            messagebox.showerror(
+                "Output only here",
+                f"Output '{target}' does not exist anymore. Hit Refresh and try again.",
+            )
+            return
+
+        # Match the discovery row to a live sink input. pactl does not expose
+        # the owning pid on a sink input, and the discovery side does not
+        # always have a pid either, so node name is the key that both views
+        # reliably carry.
+        node_name = node.get("node_name") or ""
+        if not node_name:
+            messagebox.showerror(
+                "Output only here",
+                "Could not tell which stream this row refers to — the app "
+                "did not report a node name. Hit Refresh, or use 'Route Here'.",
+            )
+            return
+
+        streams = PactlRunner.list_sink_inputs(logger=self.add_output)
+        candidates = PactlRunner.sink_inputs_for_node(streams, node_name)
+        if not candidates:
+            messagebox.showerror(
+                "Output only here",
+                f"No playing stream found for {app_str}. The app may have "
+                "stopped producing audio — hit Refresh.",
+            )
+            return
+        if len(candidates) > 1:
+            messagebox.showerror(
+                "Output only here",
+                f"{app_str} has {len(candidates)} streams matching "
+                f"'{node_name}' and Pulsar cannot tell which one you mean. "
+                "Use 'Route Here', which works on the whole device instead of "
+                "a single stream.",
+            )
+            return
+
+        stream = candidates[0]
+        if stream["sink"] == target:
+            self.add_output(
+                f"{app_str} already outputs only to '{target}' (no change)"
+            )
+            return
+
+        previous = stream["sink"] or "(unknown device)"
+        if not PactlRunner.move_sink_input(
+            stream["index"], target, logger=self.add_output
+        ):
+            messagebox.showerror(
+                "Output only here",
+                f"The audio server refused to move {app_str} to '{target}'. "
+                "It may have stopped playing in the meantime.",
+            )
+            return
+
+        self.add_output(
+            f"{app_str}: exclusive output moved {previous} → {target} "
+            f"(sink-input #{stream['index']})"
+        )
+        self.status_var.set(
+            f"{app_str} now outputs only to '{target}'"
+        )
+        self._refresh_capture_tree()
+
     def _refresh_capture_tree(self):
         """Re-scan for current app audio streams and rebuild the tree."""
         for item in self.capture_tree.get_children():
@@ -1653,20 +1789,25 @@ class MainWindow:
         if not sel:
             self.capture_selected_var.set("(no stream selected)")
             self.capture_route_button.config(state="disabled")
+            self.capture_exclusive_button.config(state="disabled")
             return
         values = self.capture_tree.item(sel[0])["values"]
         if not values:
             self.capture_route_button.config(state="disabled")
+            self.capture_exclusive_button.config(state="disabled")
             return
         pw_id, app, cls, name = values
         self.capture_selected_var.set(
             f"PW ID: {pw_id}    Class: {cls}    Name: {name}"
         )
-        # Only enable Route Here for output streams (apps producing audio)
+        # Only enable the routing actions for output streams (apps producing
+        # audio). An input stream has nothing to route to an output device.
         if cls == "Stream/Output/Audio":
             self.capture_route_button.config(state="normal")
+            self.capture_exclusive_button.config(state="normal")
         else:
             self.capture_route_button.config(state="disabled")
+            self.capture_exclusive_button.config(state="disabled")
 
     def _copy_selected_capture_node_id(self):
         sel = self.capture_tree.selection()

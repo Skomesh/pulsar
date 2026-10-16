@@ -142,6 +142,127 @@ class PactlRunner:
         return sinks
 
     @staticmethod
+    def list_sink_inputs(logger=None) -> List[Dict[str, Any]]:
+        """
+        Get every currently-playing stream (sink input) with the sink it
+        is playing to.
+
+        This is the pulseaudio-side view of what ``pw_app_capture``
+        discovers: discovery reads pw-dump and gets PipeWire node IDs, but
+        ``pactl move-sink-input`` is addressed by *sink input index*, which
+        is a different identifier for the same stream. To move a stream you
+        first need this list.
+
+        Returns:
+            A list of dicts with keys:
+              - 'index': the sink input index, as a string (what move-sink-input
+                wants). PA indexes are reused after a stream ends, so treat
+                this as valid only until the next refresh.
+              - 'application': application.name, or '' if unset
+              - 'node_name': node.name, or '' if unset
+              - 'media': media.name, or '' if unset
+              - 'sink_index': the index of the sink it is playing to
+              - 'sink': the NAME of that sink, or '' if the sink has gone away
+            Empty list if none.
+        """
+        output, return_code = PactlRunner.run_command(['list', 'sink-inputs'], logger)
+        if return_code != 0:
+            return []
+
+        # Sink name for a sink index, so callers get a name they can act on
+        # rather than a bare number that changes between calls.
+        sink_names: Dict[str, str] = {}
+        for s in PactlRunner.list_sinks():
+            if s.get('id') and s.get('name'):
+                sink_names[s['id']] = s['name']
+
+        entries: List[Dict[str, Any]] = []
+        current: Optional[Dict[str, Any]] = None
+        in_properties = False
+
+        for line in output.splitlines():
+            stripped = line.strip()
+            if line.startswith('Sink Input #'):
+                if current:
+                    entries.append(current)
+                current = {
+                    'index': line.split('#', 1)[1].strip(),
+                    'application': '',
+                    'node_name': '',
+                    'media': '',
+                    'sink_index': '',
+                    'sink': '',
+                }
+                in_properties = False
+            elif current is not None:
+                if stripped.startswith('Properties:'):
+                    in_properties = True
+                elif stripped.startswith('Formats:'):
+                    in_properties = False
+                elif in_properties and '=' in stripped:
+                    key, _, value = stripped.partition('=')
+                    key = key.strip()
+                    value = value.strip().strip('"')
+                    if key == 'application.name':
+                        current['application'] = value
+                    elif key == 'node.name':
+                        current['node_name'] = value
+                    elif key == 'media.name':
+                        current['media'] = value
+                elif stripped.startswith('Sink:'):
+                    sink_index = stripped.partition(':')[2].strip()
+                    current['sink_index'] = sink_index
+                    current['sink'] = sink_names.get(sink_index, '')
+
+        if current:
+            entries.append(current)
+        return entries
+
+    @staticmethod
+    def sink_inputs_for_node(
+        streams: List[Dict[str, Any]], node_name: str
+    ) -> List[Dict[str, Any]]:
+        """Return the sink inputs whose node.name matches ``node_name``.
+
+        This is how a discovery row (which carries a PipeWire node name from
+        pw-dump) is matched to a pactl sink input, since pactl does not
+        expose the owning pid on a sink input and the discovery side does not
+        always have one either.
+
+        Falls back to application.name when node.name is absent on the pactl
+        side, which is common for apps that do not set one.
+
+        Returns every match, not just the first: a caller that cannot
+        disambiguate needs to know there was a choice to make.
+        """
+        if not node_name:
+            return []
+        return [
+            s for s in streams
+            if s.get('node_name') == node_name or s.get('application') == node_name
+        ]
+
+    @staticmethod
+    def move_sink_input(index: str, sink_name: str, logger=None) -> bool:
+        """
+        Move a playing stream so that it outputs *only* to ``sink_name``.
+
+        This is the exclusive-routing counterpart to a loopback. A loopback
+        duplicates a sink's audio to another device and leaves the original
+        path intact; this moves the stream itself, so the sound stops on the
+        old device.
+
+        Note that PA recycles sink-input indices. An index read from a
+        previous ``list_sink_inputs`` call may name a different stream by the
+        time this runs, which the server reports as "No such entity". Re-list
+        immediately before moving rather than caching the index.
+        """
+        output, return_code = PactlRunner.run_command(
+            ['move-sink-input', str(index), sink_name], logger
+        )
+        return return_code == 0
+
+    @staticmethod
     def list_sources(logger=None) -> List[Dict[str, Any]]:
         """
         Get a comprehensive list of all audio sources (inputs) with full specifications.

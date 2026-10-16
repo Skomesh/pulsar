@@ -87,8 +87,9 @@ jobs:
       - name: Build and install the wheel
         # This is the step that catches packaging breakage. `pip install -e .`
         # above never produces a wheel, so a broken pyproject (missing
-        # main.py entry point, presets not declared as package data, a
-        # console-script pointing at a function that does not exist) is
+        # __main__ entry point, presets not declared as package data, a
+        # console-script pointing at a function that does not exist, or
+        # generic top-level modules leaking out of src/) is
         # invisible to the rest of this workflow. Build for real, install
         # into a clean venv, and import the console script.
         #
@@ -191,8 +192,8 @@ jobs:
           # Import from outside the repo so the source tree cannot satisfy it.
           cd /tmp
           /tmp/smoke/bin/python -c "
-          import main
-          assert hasattr(main, 'main'), 'main.main is missing'
+          from pulsar.__main__ import main
+          assert callable(main), 'pulsar.__main__.main is missing'
           print('console entry point importable: OK')
           "
 

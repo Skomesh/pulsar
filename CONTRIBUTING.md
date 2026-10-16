@@ -63,7 +63,7 @@ CI:
 
 It deliberately leaves `gdbus` visible, because `ubuntu-latest` ships it
 (via `libglib2.0-bin`) and the portal tests need it present. Hiding it invents
-failures CI does not have. A matching run reports `76 passed, 53 skipped` and
+failures CI does not have. A matching run reports `86 passed, 53 skipped` and
 no failures.
 
 Extra arguments are forwarded to pytest, and a test target replaces the

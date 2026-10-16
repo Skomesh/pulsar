@@ -5,23 +5,38 @@ Handles saving, loading, and managing custom audio presets.
 
 import json
 import os
+import shutil
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+
+from utils.paths import legacy_presets_dir, user_presets_dir
+
+#: PresetManager and ProfileManager are different schemas that used to share
+#: this filename. They now have their own files so migrating one cannot
+#: clobber the other.
+USER_PRESETS_FILENAME = "audio_presets.json"
 
 
 class PresetManager:
     """Manages custom audio presets for the pactl-gui application."""
 
-    def __init__(self, presets_dir: str = "presets"):
+    def __init__(self, presets_dir: Optional[str] = None):
         """
         Initialize the preset manager.
 
         Args:
-            presets_dir: Directory to store preset files
+            presets_dir: Directory to store preset files. Defaults to the
+                XDG data dir (``$XDG_DATA_HOME/pulsar/presets``). Never
+                resolve this relative to the working directory — that works
+                in a source checkout and crashes in every packaged install,
+                where the CWD is a read-only bundle.
         """
-        self.presets_dir = presets_dir
-        self.presets_file = os.path.join(presets_dir, "user_presets.json")
+        self.presets_dir = (
+            str(presets_dir) if presets_dir else str(user_presets_dir())
+        )
+        self.presets_file = os.path.join(self.presets_dir, USER_PRESETS_FILENAME)
         self._ensure_presets_dir()
+        self._migrate_legacy()
 
         # Built-in presets that cannot be deleted
         self.builtin_presets = {
@@ -60,6 +75,30 @@ class PresetManager:
     def _ensure_presets_dir(self):
         """Ensure the presets directory exists."""
         os.makedirs(self.presets_dir, exist_ok=True)
+
+    def _migrate_legacy(self):
+        """Move audio presets out of the old working-directory location.
+
+        Only runs when the new file is absent, so a user's later edits are
+        never overwritten, and it never deletes the old file without a
+        successful copy.
+        """
+        if os.path.exists(self.presets_file):
+            return
+        legacy = legacy_presets_dir()
+        if legacy is None:
+            return
+        old_file = os.path.join(str(legacy), "user_presets.json")
+        if not os.path.isfile(old_file):
+            return
+        try:
+            shutil.copyfile(old_file, self.presets_file)
+            old_backup = old_file + ".migrated"
+            os.replace(old_file, old_backup)
+        except OSError:
+            # A failed migration must not stop the app from starting; the
+            # user can still save new presets to the XDG location.
+            pass
 
     def _load_user_presets(self) -> Dict[str, Any]:
         """Load user presets from file."""

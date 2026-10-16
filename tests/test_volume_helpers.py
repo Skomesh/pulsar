@@ -20,6 +20,34 @@ def _wipe_topology():
     PactlRunner.unload_all_null_sinks()
 
 
+def _settle_source(name, timeout=1.0):
+    """Wait for module-stream-restore to finish restoring a saved volume.
+
+    PipeWire remembers the volume of every device by name. When a device is
+    recreated with a name it has seen before, stream-restore re-applies the
+    remembered value a moment after the device appears -- and that lands
+    *after* the test sets the volume it wants, overwriting it.
+
+    Concretely: the first test sets __vol_source to 100%. The next test's
+    setUp recreates it, stream-restore restores 100%, and the
+    test_source_volume_roundtrip assertion that setting 0% reads back 0%
+    fails with "100 != 0".
+
+    This only shows up when the whole file runs, because a single test in
+    isolation usually has no remembered value to restore. Waiting for the
+    restore to settle makes the test independent of run order.
+    """
+    import time
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        # A stable read twice in a row means restore has finished.
+        first = PactlRunner.get_source_volume(name)
+        time.sleep(0.05)
+        if first == PactlRunner.get_source_volume(name):
+            return
+    return
+
+
 @unittest.skipUnless(pactl_available(), "pactl not available")
 class TestVolumeHelpers(unittest.TestCase):
 
@@ -28,6 +56,9 @@ class TestVolumeHelpers(unittest.TestCase):
         # Create one sink and one source for volume tests
         PactlRunner.create_sink_only("__vol_sink", "VolSink", channels=2)
         PactlRunner.create_source_only("__vol_source", "VolSource", channels=2)
+        # stream-restore may still be re-applying a remembered volume from a
+        # previous test; wait it out before any assertion depends on it.
+        _settle_source("__vol_source")
 
     def tearDown(self):
         _wipe_topology()

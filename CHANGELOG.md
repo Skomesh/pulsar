@@ -16,9 +16,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     each is playing to
   - `PactlRunner.move_sink_input` — move one stream to one sink
   - `PactlRunner.sink_inputs_for_node` — match a discovery row to a sink input
-- Device-name parsing and classification extracted into `src/utils/device_names.py`,
+- An application icon (`assets/icons/`), generated from an SVG source by
+  `scripts/generate_icon.py` with optical sizing for small sizes.
+- Device-name parsing and classification extracted into `pulsar/utils/device_names.py`,
   making it unit-testable without a display or an audio server.
 - `tests/run_ci_equivalent.sh` for reproducing CI locally.
+
+### Changed
+- User presets and routing profiles now resolve under
+  `$XDG_DATA_HOME/pulsar/presets` instead of a `presets/` directory relative
+  to the working directory. The old behaviour crashed the app outright in any
+  sandboxed launch, and scattered a data directory wherever the app happened
+  to be started from.
+- `PresetManager` and `ProfileManager` write separate files
+  (`audio_presets.json`, `routing_profiles.json`). They previously shared
+  `user_presets.json` despite holding different schemas, so saving one could
+  discard the other.
+- The application is now a `pulsar` package (`src/pulsar/`) rather than
+  top-level `utils`, `ui` and `config` modules. This is required for distro
+  packaging: the old layout installed those generic names into system
+  `dist-packages`, where they collide with other packages.
 
 ### Fixed
 - The "Route to default output?" dialog that appeared after creating a sink or

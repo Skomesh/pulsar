@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Output Only Here** on the App Audio tab: makes the selected application
+  play on the chosen output *exclusively*, so its audio stops on the previous
+  device. Uses `pactl move-sink-input` rather than a loopback — a loopback can
+  only duplicate audio, it cannot remove the original path.
+  - `PactlRunner.list_sink_inputs` — currently-playing streams with the sink
+    each is playing to
+  - `PactlRunner.move_sink_input` — move one stream to one sink
+  - `PactlRunner.sink_inputs_for_node` — match a discovery row to a sink input
 - Device-name parsing and classification extracted into `src/utils/device_names.py`,
   making it unit-testable without a display or an audio server.
 - `tests/run_ci_equivalent.sh` for reproducing CI locally.

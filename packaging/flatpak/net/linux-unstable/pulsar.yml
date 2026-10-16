@@ -1,0 +1,195 @@
+# Flatpak manifest for Pulsar — rolling net/linux-unstable variant.
+#
+# Build:
+#     flatpak-builder --user --install --force-clean build \
+#         packaging/flatpak/net/linux-unstable/pulsar.yml
+#
+# ---------------------------------------------------------------------------
+# WHY THIS FILE EXISTS
+# ---------------------------------------------------------------------------
+# This is a thin derivative of ../pulsar.yml with a different runtime branch.
+# It exists because the audio tooling this app drives moves fast:
+# `pw-dump` output shape and `pw-top` columns change between PipeWire minor
+# releases, and pactl's JSON fields change between PulseAudio majors. Testing
+# against the rolling runtime catches those changes before they reach users on
+# a pinned branch.
+#
+# It is NOT the shipping manifest. Flathub builds from the stable runtime; this
+# one is for local/CI validation on the newest runtime.
+#
+# Only three things differ from ../pulsar.yml:
+#   1. runtime/sdk point at the Unstable branch, runtime-version is
+#      'unstable', and `branch: nightly` is added.
+#   2. tkinter-standalone is pinned to a different commit (see below).
+#   3. The app-id is suffixed .Unstable so it can be installed side by side
+#      with the stable build.
+# Everything else — finish-args, the tkinter module, the app module — is
+# intentionally identical, because the audio-sandbox problem does not change
+# between runtime branches.
+
+app-id: io.github.skomesh.pulsar.Unstable
+
+runtime: org.freedesktop.Platform
+runtime-version: 'unstable'
+sdk: org.freedesktop.Sdk
+# 'nightly' is the standard branch name for an unstable-branch flatpak; it
+# opts the app into rolling updates instead of the default 'stable' branch.
+branch: nightly
+command: pulsar
+
+finish-args:
+  # -------------------------------------------------------------------------
+  # HARDWARE ACCESS — identical to ../pulsar.yml, and deliberately so.
+  # -------------------------------------------------------------------------
+  # PulseAudio/PipeWire live OUTSIDE the sandbox. Flatpak has NO audio plug;
+  # the only route is the host's per-user socket directory. Verified against
+  # flatpak's parser (common/flatpak-context.c): "xdg-run" is only valid WITH
+  # a suffix and any suffix maps to flatpak_get_real_xdg_runtime_dir(), so
+  # `xdg-run/pulse` -> $XDG_RUNTIME_DIR/pulse (the dir holding `native`).
+  - --filesystem=xdg-run/pulse
+
+  # Native PipeWire socket for pw-dump / pw-top.
+  - --filesystem=xdg-run/pipewire-0
+
+  # Tk display access: Wayland when the session is Wayland, X11 otherwise.
+  - --socket=wayland
+  - --socket=fallback-x11
+
+  - --device=dri
+
+  # xdg-desktop-portal ScreenCast, for per-app audio capture.
+  # Exact bus name, not a wildcard: flatpak --talk-name does not glob.
+  - --talk-name=org.freedesktop.portal.Desktop
+
+  # NO permission for user data. The app writes to $XDG_DATA_HOME/pulsar,
+  # which flatpak maps to the private ~/.var/app/<app-id>/data — already
+  # writable. Adding a grant would be over-permission. This is the fix for
+  # issue #9 (data used to resolve relative to the CWD, which is the
+  # read-only /app bundle inside a flatpak).
+
+modules:
+  # -------------------------------------------------------------------------
+  # tkinter — still not in the runtime, on unstable either.
+  # -------------------------------------------------------------------------
+  # Verified on freedesktop-sdk branch `master` (what 'unstable' tracks):
+  # elements/components/python3.bst still runs
+  #     rm -rf %{install-root}%{indep-libdir}/python*/tkinter
+  # So the tkinter-standalone module is still mandatory here, and the
+  # upstream MR that would add tkinter natively is still unmerged.
+  #
+  # tkinter-standalone commit differs from the stable manifest because it
+  # must build against the Python that ships in this runtime. The unstable
+  # runtime currently carries CPython 3.14 (elements/include/python3.yml
+  # pins v3.14.8). Bump this commit when the unstable runtime's Python
+  # moves and the module stops building.
+  - name: tkinter
+    buildsystem: simple
+    build-commands:
+      - pip3 install --prefix=${FLATPAK_DEST} --no-build-isolation .
+    sources:
+      - type: git
+        url: https://github.com/iwalton3/tkinter-standalone
+        commit: 8e78e38ef0cceb44a3a0062e1c314a4ff3f981db
+    modules:
+      - name: tcl
+        buildsystem: autotools
+        config-opts:
+          - --disable-zipfs
+        subdir: unix
+        post-install:
+          - chmod 755 /app/lib/libtcl*.so
+        cleanup:
+          - /bin
+          - /lib/pkgconfig
+          - /man
+        sources:
+          - type: archive
+            url: https://prdownloads.sourceforge.net/tcl/tcl9.0.3-src.tar.gz
+            sha256: 2537ba0c86112c8c953f7c09d33f134dd45c0fb3a71f2d7f7691fd301d2c33a6
+      - name: tk
+        buildsystem: autotools
+        config-opts:
+          - --disable-zipfs
+        subdir: unix
+        post-install:
+          - chmod 755 /app/lib/libtcl*tk*.so
+        cleanup:
+          - /bin
+          - /lib/pkgconfig
+          - /man
+        sources:
+          - type: archive
+            url: https://prdownloads.sourceforge.net/tcl/tk9.0.3-src.tar.gz
+            sha256: bf344efadb618babb7933f69275620f72454d1c8220130da93e3f7feb0efbf9b
+
+  # pactl / pw-dump / pw-top / pw-record come from the runtime here too — the
+  # same pipewire.bst and libpulse.bst components described in ../pulsar.yml.
+  # Verified against those definitions on the unstable branch as well.
+
+  - name: pulsar
+    buildsystem: simple
+    build-commands:
+      - install -d /app/pulsar
+      - cp -r src/pulsar/. /app/pulsar/
+      - install -d /app/bin
+      # PYTHONPATH, not CWD. The app must never be started from a directory
+      # it might try to write into (issue #9).
+      - |
+        cat > /app/bin/pulsar <<'LAUNCHER'
+        #!/bin/sh
+        export PYTHONPATH="/app${PYTHONPATH:+:$PYTHONPATH}"
+        exec python3 -m pulsar "$@"
+        LAUNCHER
+      - chmod +x /app/bin/pulsar
+
+      # Desktop entry authored fresh: the repo's pulsar.desktop is a template
+      # with Exec=PLACEHOLDER_EXEC_PATH, which must never be shipped as-is.
+      - install -d /app/share/applications
+      - |
+        cat > /app/share/applications/io.github.skomesh.pulsar.Unstable.desktop <<'DESKTOP'
+        [Desktop Entry]
+        Type=Application
+        Version=1.0
+        Name=Pulsar
+        GenericName=Audio Routing
+        Comment=Graphical audio routing manager for PulseAudio and PipeWire
+        Exec=pulsar
+        Icon=io.github.skomesh.pulsar.Unstable
+        Terminal=false
+        Categories=AudioVideo;Audio;Settings;Mixer;
+        Keywords=sound;audio;volume;pulseaudio;pipewire;routing;loopback;mixer;streamer;
+        StartupNotify=true
+        DESKTOP
+
+      # Icons: scalable SVG plus every PNG raster.
+      - install -d /app/share/icons/hicolor/scalable/apps
+      - install -m 0644 assets/icons/pulsar.svg /app/share/icons/hicolor/scalable/apps/io.github.skomesh.pulsar.Unstable.svg
+      - install -d /app/share/icons/hicolor/16x16/apps
+      - install -m 0644 assets/icons/pulsar-16.png /app/share/icons/hicolor/16x16/apps/io.github.skomesh.pulsar.Unstable.png
+      - install -d /app/share/icons/hicolor/24x24/apps
+      - install -m 0644 assets/icons/pulsar-24.png /app/share/icons/hicolor/24x24/apps/io.github.skomesh.pulsar.Unstable.png
+      - install -d /app/share/icons/hicolor/32x32/apps
+      - install -m 0644 assets/icons/pulsar-32.png /app/share/icons/hicolor/32x32/apps/io.github.skomesh.pulsar.Unstable.png
+      - install -d /app/share/icons/hicolor/48x48/apps
+      - install -m 0644 assets/icons/pulsar-48.png /app/share/icons/hicolor/48x48/apps/io.github.skomesh.pulsar.Unstable.png
+      - install -d /app/share/icons/hicolor/64x64/apps
+      - install -m 0644 assets/icons/pulsar-64.png /app/share/icons/hicolor/64x64/apps/io.github.skomesh.pulsar.Unstable.png
+      - install -d /app/share/icons/hicolor/128x128/apps
+      - install -m 0644 assets/icons/pulsar-128.png /app/share/icons/hicolor/128x128/apps/io.github.skomesh.pulsar.Unstable.png
+      - install -d /app/share/icons/hicolor/256x256/apps
+      - install -m 0644 assets/icons/pulsar-256.png /app/share/icons/hicolor/256x256/apps/io.github.skomesh.pulsar.Unstable.png
+      - install -d /app/share/icons/hicolor/512x512/apps
+      - install -m 0644 assets/icons/pulsar-512.png /app/share/icons/hicolor/512x512/apps/io.github.skomesh.pulsar.Unstable.png
+
+      - |
+        if [ -f assets/metainfo/io.github.skomesh.pulsar.Unstable.metainfo.xml ]; then
+          install -d /app/share/metainfo
+          install -m 0644 assets/metainfo/io.github.skomesh.pulsar.Unstable.metainfo.xml \
+            /app/share/metainfo/io.github.skomesh.pulsar.Unstable.metainfo.xml
+        fi
+    sources:
+      # This manifest lives one level deeper than ../pulsar.yml
+      # (packaging/flatpak/net/linux-unstable/), so it needs one more ../ to
+      # reach the repo root.
+      - type: dir
+        path: ../../../..

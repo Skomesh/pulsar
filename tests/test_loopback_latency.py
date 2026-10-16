@@ -9,7 +9,7 @@ underruns and audio goes robotic/crackly.
 """
 import unittest
 
-from utils.pactl_runner import PactlRunner
+from pulsar.utils.pactl_runner import PactlRunner
 
 
 class TestRecommendedLoopbackLatency(unittest.TestCase):

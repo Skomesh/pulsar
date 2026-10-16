@@ -16,8 +16,8 @@ import unittest
 from contextlib import ExitStack
 from unittest import mock
 
-from ui.main_window import MainWindow
-from utils.pactl_runner import PactlRunner
+from pulsar.ui.main_window import MainWindow
+from pulsar.utils.pactl_runner import PactlRunner
 
 # Real output from `pactl list sink-inputs` on PipeWire, trimmed. Note there
 # is no pid anywhere in it — pactl does not expose one for a sink input,
@@ -239,7 +239,7 @@ class _PactlPatch:
             PactlRunner, "move_sink_input", return_value=move_ok
         ))
         self.msgbox = self.stack.enter_context(
-            mock.patch("ui.main_window.messagebox")
+            mock.patch("pulsar.ui.main_window.messagebox")
         )
 
     def __enter__(self):

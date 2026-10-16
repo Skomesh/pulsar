@@ -11,7 +11,7 @@ import shutil
 import unittest
 from unittest import mock
 
-from utils.pw_app_capture import (
+from pulsar.utils.pw_app_capture import (
     SOURCE_TYPE_MONITOR,
     SOURCE_TYPE_WINDOW,
     PortalCapture,
@@ -45,44 +45,44 @@ class TestPortalHealthChecks(unittest.TestCase):
         # The function is just shutil.which('gdbus')
         self.assertIsInstance(portal_available(), bool)
 
-    @mock.patch("utils.pw_app_capture.subprocess.check_output")
+    @mock.patch("pulsar.utils.pw_app_capture.subprocess.check_output")
     def test_screencast_version_parses_uint32(self, mock_run):
         mock_run.return_value = b"(<uint32 5>,)"
         self.assertEqual(portal_screencast_version(), 5)
 
-    @mock.patch("utils.pw_app_capture.subprocess.check_output")
+    @mock.patch("pulsar.utils.pw_app_capture.subprocess.check_output")
     def test_screencast_version_unreachable_returns_none(self, mock_run):
         import subprocess
         mock_run.side_effect = subprocess.CalledProcessError(1, "gdbus")
         self.assertIsNone(portal_screencast_version())
 
-    @mock.patch("utils.pw_app_capture.subprocess.check_output")
+    @mock.patch("pulsar.utils.pw_app_capture.subprocess.check_output")
     def test_available_source_types_parses(self, mock_run):
         mock_run.return_value = b"(<uint32 7>,)"
         self.assertEqual(portal_available_source_types(), 7)
 
-    @mock.patch("utils.pw_app_capture.subprocess.check_output")
+    @mock.patch("pulsar.utils.pw_app_capture.subprocess.check_output")
     def test_available_source_types_unreachable_returns_none(self, mock_run):
         import subprocess
         mock_run.side_effect = subprocess.TimeoutExpired("gdbus", 5)
         self.assertIsNone(portal_available_source_types())
 
     @mock.patch(
-        "utils.pw_app_capture.portal_available_source_types",
+        "pulsar.utils.pw_app_capture.portal_available_source_types",
         return_value=0x7,
     )
     def test_supports_app_capture_true(self, _):
         self.assertTrue(supports_app_capture())
 
     @mock.patch(
-        "utils.pw_app_capture.portal_available_source_types",
+        "pulsar.utils.pw_app_capture.portal_available_source_types",
         return_value=SOURCE_TYPE_MONITOR | SOURCE_TYPE_WINDOW,  # no app
     )
     def test_supports_app_capture_false_when_app_bit_missing(self, _):
         self.assertFalse(supports_app_capture())
 
     @mock.patch(
-        "utils.pw_app_capture.portal_available_source_types",
+        "pulsar.utils.pw_app_capture.portal_available_source_types",
         return_value=None,
     )
     def test_supports_app_capture_false_when_unreachable(self, _):
@@ -115,21 +115,21 @@ class TestObjectPathParser(unittest.TestCase):
 class TestPortalCapture(unittest.TestCase):
     """PortalCapture drives the gdbus subprocess. Mock subprocess to test."""
 
-    @mock.patch("utils.pw_app_capture.subprocess.check_output")
+    @mock.patch("pulsar.utils.pw_app_capture.subprocess.check_output")
     def test_create_session_returns_handle(self, mock_run):
         mock_run.return_value = (
             b"(objectpath '/org/freedesktop/portal/desktop/session/99/1',)"
         )
         # supports_app_capture is called inside; mock it
         with mock.patch(
-            "utils.pw_app_capture.supports_app_capture", return_value=True
+            "pulsar.utils.pw_app_capture.supports_app_capture", return_value=True
         ):
             pc = PortalCapture()
             handle = pc.create_session()
         self.assertEqual(handle, "/org/freedesktop/portal/desktop/session/99/1")
         self.assertEqual(pc._session_handle, handle)
 
-    @mock.patch("utils.pw_app_capture.subprocess.check_output")
+    @mock.patch("pulsar.utils.pw_app_capture.subprocess.check_output")
     def test_create_session_raises_when_app_capture_unsupported(self, mock_run):
         # The error message includes the available source types bit flags,
         # so subprocess.check_output is called for the diagnostic. We just
@@ -137,7 +137,7 @@ class TestPortalCapture(unittest.TestCase):
         # subprocess.check_output called with the CreateSession method).
         mock_run.return_value = b"(<uint32 3>,)"  # MONITOR | WINDOW, no app
         with mock.patch(
-            "utils.pw_app_capture.supports_app_capture", return_value=False
+            "pulsar.utils.pw_app_capture.supports_app_capture", return_value=False
         ):
             pc = PortalCapture()
             with self.assertRaises(PortalCaptureError):
@@ -157,14 +157,14 @@ class TestPortalCapture(unittest.TestCase):
             "CreateSession should not be called when app capture is unsupported",
         )
 
-    @mock.patch("utils.pw_app_capture.subprocess.check_output")
+    @mock.patch("pulsar.utils.pw_app_capture.subprocess.check_output")
     def test_select_sources_succeeds_on_zero_response(self, mock_run):
         mock_run.return_value = b"(uint32 0,)"
         pc = PortalCapture()
         pc._session_handle = "/session/test"
         pc.select_sources()  # should not raise
 
-    @mock.patch("utils.pw_app_capture.subprocess.check_output")
+    @mock.patch("pulsar.utils.pw_app_capture.subprocess.check_output")
     def test_select_sources_raises_on_nonzero(self, mock_run):
         mock_run.return_value = b"(uint32 1,)"
         pc = PortalCapture()
@@ -202,12 +202,12 @@ class TestDiscoverAppAudioNodes(unittest.TestCase):
             *nodes,
         ]
 
-    @mock.patch("utils.pw_app_capture._run_pw_dump")
+    @mock.patch("pulsar.utils.pw_app_capture._run_pw_dump")
     def test_returns_empty_when_no_pw_dump(self, mock_run):
         mock_run.return_value = None
         self.assertEqual(discover_app_audio_nodes(), [])
 
-    @mock.patch("utils.pw_app_capture._run_pw_dump")
+    @mock.patch("pulsar.utils.pw_app_capture._run_pw_dump")
     def test_filters_hardware_sinks(self, mock_run):
         mock_run.return_value = self._fake_pw_dump([
             {
@@ -225,7 +225,7 @@ class TestDiscoverAppAudioNodes(unittest.TestCase):
         result = discover_app_audio_nodes()
         self.assertEqual(result, [])
 
-    @mock.patch("utils.pw_app_capture._run_pw_dump")
+    @mock.patch("pulsar.utils.pw_app_capture._run_pw_dump")
     def test_finds_app_output_stream(self, mock_run):
         mock_run.return_value = self._fake_pw_dump([
             {
@@ -252,7 +252,7 @@ class TestDiscoverAppAudioNodes(unittest.TestCase):
         self.assertEqual(n["pid"], 12345)
         self.assertEqual(n["media_class"], "Stream/Output/Audio")
 
-    @mock.patch("utils.pw_app_capture._run_pw_dump")
+    @mock.patch("pulsar.utils.pw_app_capture._run_pw_dump")
     def test_finds_app_input_stream(self, mock_run):
         mock_run.return_value = self._fake_pw_dump([
             {
@@ -273,7 +273,7 @@ class TestDiscoverAppAudioNodes(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["media_class"], "Stream/Input/Audio")
 
-    @mock.patch("utils.pw_app_capture._run_pw_dump")
+    @mock.patch("pulsar.utils.pw_app_capture._run_pw_dump")
     def test_skips_streams_without_app_metadata(self, mock_run):
         """Some streams (e.g. easyeffects internal) lack application.name
         or application.process.binary. We can't show them meaningfully
@@ -293,7 +293,7 @@ class TestDiscoverAppAudioNodes(unittest.TestCase):
         ])
         self.assertEqual(discover_app_audio_nodes(), [])
 
-    @mock.patch("utils.pw_app_capture._run_pw_dump")
+    @mock.patch("pulsar.utils.pw_app_capture._run_pw_dump")
     def test_results_sorted(self, mock_run):
         mock_run.return_value = self._fake_pw_dump([
             {
@@ -336,7 +336,7 @@ class TestDiscoverAppAudioNodes(unittest.TestCase):
         for n in result:
             self.assertIn("sink_name", n)
 
-    @mock.patch("utils.pw_app_capture._run_pw_dump")
+    @mock.patch("pulsar.utils.pw_app_capture._run_pw_dump")
     def test_includes_sink_name_from_links(self, mock_run):
         """sink_name is populated from pw-dump Links — the link's
         input-node-id is the sink (where audio goes), output-node-id
@@ -363,7 +363,7 @@ class TestDiscoverAppAudioNodes(unittest.TestCase):
         self.assertEqual(result[0]["application_name"], "LibreWolf")
         self.assertEqual(result[0]["sink_name"], "easyeffects_sink")
 
-    @mock.patch("utils.pw_app_capture._run_pw_dump")
+    @mock.patch("pulsar.utils.pw_app_capture._run_pw_dump")
     def test_sink_name_none_when_no_link(self, mock_run):
         """If the app isn't connected to any sink (e.g. paused), sink_name is None."""
         mock_run.return_value = [
@@ -388,14 +388,14 @@ class TestPwRecord(unittest.TestCase):
         result = pw_record_available()
         self.assertIsInstance(result, bool)
 
-    @mock.patch("utils.pw_app_capture.shutil.which", return_value=None)
+    @mock.patch("pulsar.utils.pw_app_capture.shutil.which", return_value=None)
     def test_start_pw_record_raises_when_not_installed(self, _):
         with self.assertRaises(PwRecordError) as ctx:
             start_pw_record(123, "/tmp/output.wav")
         self.assertIn("pw-record not found", str(ctx.exception))
 
-    @mock.patch("utils.pw_app_capture.shutil.which", return_value="/usr/bin/pw-record")
-    @mock.patch("utils.pw_app_capture.subprocess.Popen")
+    @mock.patch("pulsar.utils.pw_app_capture.shutil.which", return_value="/usr/bin/pw-record")
+    @mock.patch("pulsar.utils.pw_app_capture.subprocess.Popen")
     def test_start_pw_record_builds_correct_command(self, mock_popen, _):
         mock_popen.return_value = mock.MagicMock()
         start_pw_record(456, "/tmp/x.wav", sample_rate=44100, channels=1)

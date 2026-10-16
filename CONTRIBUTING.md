@@ -31,7 +31,7 @@ git clone https://github.com/Skomesh/pulsar.git
 cd pulsar
 ./install.sh
 # or, for a no-install run:
-python3 src/main.py
+python3 -m pulsar
 ```
 
 ## Running tests

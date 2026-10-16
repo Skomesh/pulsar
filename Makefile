@@ -15,7 +15,7 @@ help:  ## Show this help message
 	@echo "Runtime requirement: pactl (from PulseAudio or PipeWire)"
 
 run:  ## Run the application
-	python3 src/main.py
+	python3 -m pulsar
 
 install:  ## Run the project install script
 	./install.sh
@@ -29,7 +29,7 @@ lint:  ## Lint source code (uses ruff if available, otherwise py_compile)
 		ruff check src/; \
 	else \
 		echo "ruff not installed; falling back to py_compile syntax check"; \
-		python3 -m py_compile src/main.py; \
+		python3 -m py_compile src/pulsar/__main__.py; \
 	fi
 
 format:  ## Auto-format source code with ruff

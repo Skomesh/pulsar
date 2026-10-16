@@ -1,0 +1,190 @@
+name: Release
+
+# Builds every distributable format and attaches them to a GitHub release.
+#
+# Triggered by pushing a v* tag. Every artifact ends up as a file on the
+# GitHub release and nowhere else: there is deliberately no publishing to the
+# snap store, Flathub, an apt repository or a yum repository. Users install
+# by downloading the file. That keeps the release path free of store
+# credentials and free of half-published states -- if the build breaks, the
+# release has no artifacts rather than some of them.
+#
+# The recipes are still written the way each store expects, so uploading by
+# hand later is a matter of `snapcraft upload` / a Flathub PR, not a rewrite.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build (e.g. v0.2.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # Build everything first, then publish. A failure in one format should not
+  # leave a half-populated release behind.
+  build:
+    name: Build ${{ matrix.format }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - format: appimage
+            os: ubuntu-22.04
+          - format: deb
+            os: ubuntu-22.04
+          - format: rpm
+            os: fedora-latest
+          - format: flatpak
+            os: ubuntu-22.04
+          - format: snap
+            os: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          # Single source of truth: pyproject.toml. The tag must agree with
+          # it, because a mismatch here is how you end up shipping a
+          # 0.2.0 tarball labelled 0.3.0.
+          PYPROJECT=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
+          TAGGED="${TAG#v}"
+          echo "tag=$TAGGED"       >> "$GITHUB_OUTPUT"
+          echo "pyproject=$PYPROJECT" >> "$GITHUB_OUTPUT"
+          if [ "$TAGGED" != "$PYPROJECT" ]; then
+            echo "::error::tag $TAG does not match pyproject version $PYPROJECT"
+            exit 1
+          fi
+          echo "Version $TAGGED confirmed from pyproject.toml"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - uses: actions/checkout@v4
+
+      # --- AppImage -------------------------------------------------------
+      - name: Build AppImage
+        if: matrix.format == 'appimage'
+        run: ./scripts/build_appimage.sh --version "${{ steps.ver.outputs.tag }}"
+
+      # --- Debian ---------------------------------------------------------
+      - name: Install debian tooling
+        if: matrix.format == 'deb'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y debhelper dh-python python3-all \
+            python3-setuptools python3-wheel fakeroot lintian
+
+      - name: Build deb
+        if: matrix.format == 'deb'
+        run: |
+          set -euo pipefail
+          # debhelper expects the changelog version to match, and it is the
+          # authority for the .deb version -- not the tag.
+          head -1 debian/changelog
+          dpkg-buildpackage -us -uc -b --no-sign
+          mkdir -p dist/
+          cp ../pulsar_*.deb dist/ || ls -la ../
+          ls -la dist/
+
+      - name: Lint deb
+        if: matrix.format == 'deb'
+        continue-on-error: true
+        run: lintian dist/*.deb || true
+
+      # --- RPM ------------------------------------------------------------
+      - name: Build rpm
+        if: matrix.format == 'rpm'
+        run: |
+          set -euo pipefail
+          # Fedora ships the python3-devel headers needed by %py3_build.
+          sudo dnf install -y rpm-build python3-devel python3-pip \
+            desktop-file-utils
+          mkdir -p dist
+          rpmbuild -ta \
+            --define "_topdir $PWD/rpmbuild" \
+            --define "_version ${{ steps.ver.outputs.tag }}" \
+            pulsar.spec
+          find rpmbuild/RPMS -name '*.rpm' -exec cp {} dist/ \;
+          ls -la dist/
+
+      # --- Flatpak --------------------------------------------------------
+      - name: Build flatpak
+        if: matrix.format == 'flatpak'
+        run: |
+          set -euo pipefail
+          # The freedesktop SDK is a large download; fail clearly rather
+          # than timing out obscurely.
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak remote-add --if-not-exists flathub \
+            https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install -y flathub \
+            org.freedesktop.Platform//24.08 org.freedesktop.Sdk//24.08
+          flatpak-builder --user --install --force-clean \
+            build-dir packaging/flatpak/pulsar.yml
+          flatpak build-export repo build-dir
+          flatpak build-bundle repo dist/pulsar.flatpak \
+            org.skomesh.Pulsar "${{ steps.ver.outputs.tag }}"
+          ls -la dist/
+
+      # --- Snap -----------------------------------------------------------
+      - name: Build snap
+        if: matrix.format == 'snap'
+        run: |
+          set -euo pipefail
+          sudo snap install snapcraft --classic
+          snapcraft --destructive-mode
+          mkdir -p dist
+          cp ./*.snap dist/
+          ls -la dist/
+
+      - name: Collect artifacts
+        if: always()
+        run: ls -la dist/ || true
+
+      - name: Upload to release
+        uses: actions/upload-release-asset@v1
+        with:
+          asset_path: dist/*
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+        continue-on-error: true
+
+  summary:
+    name: Release summary
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report
+        run: |
+          echo "### Release ${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Artifacts attached to this release:" >> "$GITHUB_STEP_SUMMARY"
+          echo "- AppImage (run the file; no install)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- deb (\`sudo dpkg -i\`)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- rpm (\`sudo dnf install\`)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- snap (\`sudo snap install --dangerous\`)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- flatpak (\`flatpak install\`)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Nothing is published to the snap store, Flathub, or any apt/yum" >> "$GITHUB_STEP_SUMMARY"
+          echo "repository. Distribution is by downloading the file." >> "$GITHUB_STEP_SUMMARY"

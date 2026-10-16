@@ -141,10 +141,31 @@ jobs:
           else:
               print(z.read(entry[0]).decode().strip())
 
-          # main.py must be an importable top-level module, or the
-          # `pulsar` console script cannot resolve.
-          if not any(n == "main.py" for n in names):
-              errors.append("main.py is not in the wheel, so `pulsar` cannot resolve")
+          # The console script points at pulsar.__main__:main, so that module
+          # has to be in the wheel or `pulsar` cannot resolve. This used to
+          # assert on top-level `main.py`, which was correct before the app
+          # moved into a `pulsar` package.
+          if not any(n == "pulsar/__main__.py" for n in names):
+              errors.append(
+                  "pulsar/__main__.py is not in the wheel, so `pulsar` cannot resolve"
+              )
+
+          # top_level.txt must name only `pulsar`. If generic names like
+          # `utils` or `config` reappear at the top level, a distro package
+          # would install them into system dist-packages where they collide
+          # with other packages. This is the Gate B check.
+          tl = [n for n in names if n.endswith("top_level.txt")]
+          if not tl:
+              errors.append("wheel has no top_level.txt")
+          else:
+              top = z.read(tl[0]).decode().split()
+              print("top_level:", top)
+              if top != ["pulsar"]:
+                  errors.append(
+                      "top_level.txt is %s, expected only ['pulsar']; "
+                      "generic top-level modules collide in distro installs"
+                      % top
+                  )
 
           # The preset data must actually ship as a .json payload.
           data = [n for n in names if n.endswith(".json")]

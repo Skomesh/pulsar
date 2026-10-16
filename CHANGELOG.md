@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - The non-ALSA fallback tested `'sink' in str(type(device_data))`, which asks
   whether the string `"<class 'dict'>"` contains `"sink"` — always false — so
   every such device was classified `builtin`.
+- A GPU card whose `device.description` names no vendor (`HDMI Audio Device`)
+  was filed as `builtin` by the device-name path and `hdmi` by the module path.
+  The two classifiers carried separate GPU hint lists and `classify_device_name`
+  was missing `hdmi`.
 
 ## [0.1.0] - 2026-06-17
 

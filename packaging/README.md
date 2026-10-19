@@ -102,8 +102,10 @@ it is meaningless, it is a Makefile, and `make` is not always installed.
 
 Targets Fedora. Uses `%pyproject_wheel` / `%pyproject_install` /
 `%pyproject_save_files` from `pyproject-rpm-macros`, which ship with
-Fedora's `python3-devel` and exist nowhere on Ubuntu. A build on Ubuntu
-therefore cannot go past `%build`.
+Fedora's `python3-devel` and exist nowhere on Ubuntu — so building here
+means fetching those macro definitions from `src.fedoraproject.org` and
+pointing `rpmbuild` at them. With that in place the spec builds
+end-to-end and produces a real `.rpm`.
 
 Two bugs that only a real build finds, both fixed:
 
@@ -183,7 +185,7 @@ the version from the branch.
 |---|---|---|
 | **deb** | yes | Assembled with `dpkg-deb`, inspected, extracted. Real `.deb` produced. |
 | **AppImage** | yes | 69 MB, sha256 verified, extracted and **run** — GUI rendered under Xvfb. |
-| **rpm** | no | `%prep` passes against a real tarball. `%build` needs Fedora macros. |
+| **rpm** | yes | Built end-to-end with Fedora's `pyproject-rpm-macros` under `rpmbuild 6.0.1`. Real `.rpm`, 62 files, `check-files` reports nothing unpackaged. |
 | **flatpak** | no | Manifests parse and validate; the freedesktop SDK is a large download not fetched here. |
 | **snap** | no | `snapcraft` ships only as a snap; this box has no snapd. |
 

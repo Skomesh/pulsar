@@ -1619,7 +1619,7 @@ class MainWindow:
             messagebox.showerror(
                 "Would create a feedback loop",
                 f"Routing '{app_str}' to '{target}' would close this loop:\n\n"
-                f"    {' → '.join(exc.chain)}\n\n"
+                f"    {exc.render()}\n\n"
                 "That would feed the audio back into its own input. Remove "
                 "one of those routes on the Manage tab first.",
             )
@@ -1628,12 +1628,12 @@ class MainWindow:
             if removed:
                 self.add_output(
                     f"Rerouted '{app_str}' (via {sink_name}): "
-                    f"removed old route(s) to {', '.join(removed)} → "
+                    f"removed old route(s) to {', '.join(removed)} -> "
                     f"now on '{target}' (loopback #{lb_id})"
                 )
             else:
                 self.add_output(
-                    f"Routed '{app_str}' (via {sink_name}) → '{target}' "
+                    f"Routed '{app_str}' (via {sink_name}) -> '{target}' "
                     f"(loopback #{lb_id})"
                 )
             self.refresh_all_views()
@@ -1753,7 +1753,7 @@ class MainWindow:
             return
 
         self.add_output(
-            f"{app_str}: exclusive output moved {previous} → {target} "
+            f"{app_str}: exclusive output moved {previous} -> {target} "
             f"(sink-input #{stream['index']})"
         )
         self.status_var.set(
@@ -2091,7 +2091,7 @@ class MainWindow:
                 self.output_text.insert(tk.END, f"\n[{timestamp}] {text}\n")
             elif text.startswith("Command ") or text.startswith("Error:") or text.startswith("Output:"):
                 # Command result - indent slightly
-                self.output_text.insert(tk.END, f"  → {text}\n")
+                self.output_text.insert(tk.END, f"  -> {text}\n")
             else:
                 # Regular application message
                 self.output_text.insert(tk.END, text + "\n")
@@ -2860,7 +2860,7 @@ class MainWindow:
                 messagebox.showerror(
                     "Would create a feedback loop",
                     f"Routing '{sink}' to '{t}' would close this loop:\n\n"
-                    f"    {' → '.join(exc.chain)}\n\n"
+                    f"    {exc.render()}\n\n"
                     "That target was skipped. Remove one of those routes "
                     "on the Manage tab first.",
                 )
@@ -2961,7 +2961,7 @@ class MainWindow:
         if current and current.get("sink") in outputs:
             self.routing_output_var.set(current["sink"])
             self.routing_status_var.set(
-                f"Currently routing '{sink_name}' → '{current['sink']}' "
+                f"Currently routing '{sink_name}' -> '{current['sink']}' "
                 f"(loopback module #{current['id']})"
             )
             self.route_button.config(state="normal")
@@ -3260,7 +3260,7 @@ class MainWindow:
         ) if card else False
         if ok:
             self.add_output(
-                f"Card profile switched: {sink_desc} → {profile_name}"
+                f"Card profile switched: {sink_desc} -> {profile_name}"
             )
             self.refresh_all_views()
         else:
@@ -3358,7 +3358,7 @@ class MainWindow:
             messagebox.showerror(
                 "Would create a feedback loop",
                 f"Routing '{sink_name}' to '{target}' would close this loop:\n\n"
-                f"    {' → '.join(exc.chain)}\n\n"
+                f"    {exc.render()}\n\n"
                 "Remove one of those routes first.",
             )
             return
@@ -3368,9 +3368,9 @@ class MainWindow:
             return
 
         self.add_output(
-            f"Routing '{sink_name}' → '{target}' (loopback module #{lb_id})"
+            f"Routing '{sink_name}' -> '{target}' (loopback module #{lb_id})"
         )
-        self.status_var.set(f"Routed '{sink_name}' → '{target}'")
+        self.status_var.set(f"Routed '{sink_name}' -> '{target}'")
         self.refresh_all_views()
         # Re-select the same sink to refresh the routing panel state
         self._reselect_after_refresh(sink_name)
@@ -3471,7 +3471,7 @@ class MainWindow:
                 messagebox.showerror(
                     "Would create a feedback loop",
                     f"Routing '{sink_name}' to '{target}' would close this "
-                    f"loop:\n\n    {' → '.join(exc.chain)}\n\n"
+                    f"loop:\n\n    {exc.render()}\n\n"
                     "That target was skipped. Remove one of those routes "
                     "on the Manage tab first.",
                 )
@@ -3485,11 +3485,11 @@ class MainWindow:
         # Report
         if created:
             self.add_output(
-                f"Multi-routing '{sink_name}' → {', '.join(sorted(created))}"
+                f"Multi-routing '{sink_name}' -> {', '.join(sorted(created))}"
             )
         if removed:
             self.add_output(
-                f"Stopped routing '{sink_name}' → {', '.join(sorted(removed))}"
+                f"Stopped routing '{sink_name}' -> {', '.join(sorted(removed))}"
             )
         if failed:
             self.add_output(
@@ -3531,7 +3531,7 @@ class MainWindow:
             if PactlRunner.unload_loopback(lb["id"]):
                 unloaded += 1
                 self.add_output(
-                    f"Stopped routing '{sink_name}' → '{lb.get('sink')}' "
+                    f"Stopped routing '{sink_name}' -> '{lb.get('sink')}' "
                     f"(unloaded #{lb['id']})"
                 )
         self.status_var.set(

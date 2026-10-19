@@ -14,11 +14,26 @@ class LoopbackCycleError(Exception):
     is the other half of the loop, e.g. ``['music', 'game', 'voice',
     'music']`` -- rather than silently doing nothing and leaving them to
     wonder why the button did nothing.
+
+    ``arrow`` is the separator used when a chain is rendered for a human.
+    It is plain ASCII on purpose. The obvious choice, U+2192 RIGHTWARDS
+    ARROW, does not render in every font a Linux desktop can resolve: on
+    this machine the default face resolves to NimbusSans-Regular.otf via
+    fontconfig, which serves a circled glyph for it instead, so the chain
+    reads as "a -> b" with blobs between the names. ASCII cannot fail
+    that way, and a route chain nobody can read is worse than one that is
+    a little less pretty.
     """
+
+    arrow = "->"
 
     def __init__(self, chain: List[str]):
         self.chain = chain
-        super().__init__(" -> ".join(chain))
+        super().__init__(f" {self.arrow} ".join(chain))
+
+    def render(self) -> str:
+        """The chain as a readable one-liner, using the safe separator."""
+        return f" {self.arrow} ".join(self.chain)
 
 
 class PactlRunner:

@@ -692,7 +692,7 @@ class ProfileManager:
                 # failure rather than leaving half a topology loaded.
                 result["errors"].append(
                     f"Routing {src!r} -> {tgt!r} would create a feedback "
-                    f"loop: {' -> '.join(exc.chain)}"
+                    f"loop: {exc.render()}"
                 )
                 self._rollback(result, logger)
                 return result

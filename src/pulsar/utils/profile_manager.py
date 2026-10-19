@@ -59,7 +59,7 @@ import shutil
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from pulsar.utils.pactl_runner import PactlRunner
+from pulsar.utils.pactl_runner import LoopbackCycleError, PactlRunner
 from pulsar.utils.paths import legacy_presets_dir, user_presets_dir
 
 CURRENT_SCHEMA_VERSION = 2
@@ -682,7 +682,20 @@ class ProfileManager:
                 return result
             if logger:
                 logger(f"  Routing: {src} -> {tgt}")
-            lb_id = PactlRunner.create_loopback(monitor, tgt, latency, logger=logger)
+            try:
+                lb_id = PactlRunner.create_loopback(
+                    monitor, tgt, latency, logger=logger
+                )
+            except LoopbackCycleError as exc:
+                # A profile that routes a -> b and b -> a would build a
+                # feedback loop. Refuse and roll back like any other apply
+                # failure rather than leaving half a topology loaded.
+                result["errors"].append(
+                    f"Routing {src!r} -> {tgt!r} would create a feedback "
+                    f"loop: {' -> '.join(exc.chain)}"
+                )
+                self._rollback(result, logger)
+                return result
             if lb_id is None:
                 result["errors"].append(
                     f"Failed to create loopback from {src!r} to {tgt!r}"

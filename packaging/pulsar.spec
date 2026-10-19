@@ -88,14 +88,26 @@ directory is created in the package's install prefix, so this package remains
 fully relocatable and does not need a %post script.
 
 %prep
+%autosetup -p %{name}-%{version}
+
 # Fail loudly if pyproject.toml and the spec header disagree. Version is
 # maintained in pyproject.toml; this keeps the two in step the same way
 # debian/rules does for the Debian package.
+#
+# This check MUST come after the source-unpacking line above. The tarball is
+# not unpacked until then, so running this first reads a pyproject.toml that
+# does not exist and fails the build with a misleading "version does not
+# match" -- on every platform, including Fedora.
+#
+# One more RPM trap, learned the hard way while writing this very comment:
+# RPM expands macros everywhere in a section, including inside comment text.
+# Naming a macro in prose expands it to its shell script, and the remainder
+# of that comment line then executes as shell. Refer to macros by description
+# ("the source-unpacking line"), never by their literal name in a comment.
 if [ "$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' pyproject.toml | head -1)" != "%{version}" ]; then
     echo "ERROR: version in pyproject.toml does not match %%version (%{version})" >&2
     exit 1
 fi
-%autosetup -p %{name}-%{version}
 
 %build
 # Pure Python: no compilation, no extension modules. pyproject.toml's

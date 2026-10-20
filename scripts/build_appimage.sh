@@ -76,6 +76,10 @@ DIST_DIR="$REPO_ROOT/dist"
 # digest from the GitHub API matches what is written here.
 PBS_VERSION="20261013"
 PBS_PYTHON_SERIES="3.13"
+# The full upstream version string, patch included. python-build-standalone
+# names its assets cpython-<major.minor.patch>+<date>-<target>-... , so the
+# URL needs 3.13.16+20261013, not 3.13 and 20261013 spliced together.
+PBS_PYTHON_FULL_VERSION="3.13.16+20261013"
 PBS_SHA256_x86_64="e588e50db882fa6a89f926d9a9ad64e445183af0eda5bda226a2c151b17db8a6"
 PBS_SHA256_aarch64="0fce0605da7b6532d5bdaec185336ffaaddd02ec04e27382014952ca4857ed6d"
 
@@ -437,7 +441,7 @@ Supply a runtime explicitly:
   --python-tarball /path/to/cpython-<ver>-<target>-install_only.tar.gz
   --python-prefix  /path/to/unpacked/python
 or set PULSAR_PYTHON_URL to a URL you trust."
-        PYTHON_URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_VERSION}/cpython-${PBS_PYTHON_SERIES}.${PBS_VERSION}-${PBS_TARGET}-install_only.tar.gz"
+        PYTHON_URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_VERSION}/cpython-${PBS_PYTHON_FULL_VERSION}-${PBS_TARGET}-install_only.tar.gz"
     fi
     [ -n "$PYTHON_SHA256" ] || eval "PYTHON_SHA256=\"\${PBS_SHA256_${ARCH}:-}\""
 

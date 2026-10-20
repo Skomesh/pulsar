@@ -2,16 +2,16 @@
 #
 # NOT BUILT AND NOT VERIFIED BY rpmbuild. rpmbuild/rpm are not installed on the
 # machine this spec was written on, so no `rpmbuild -ba` was run and no binary
-# RPM exists. The %prep/%build/%install shell bodies were extracted and checked
+# RPM exists. The %%prep/%%build/%%install shell bodies were extracted and checked
 # with `bash -n` only, which catches syntax errors but proves nothing about
-# whether the files land where %files expects them. Build it before trusting it.
+# whether the files land where %%files expects them. Build it before trusting it.
 #
-# WHY pyproject-rpm-macros AND NOT `pip install` IN %install:
+# WHY pyproject-rpm-macros AND NOT `pip install` IN %%install:
 #
-# %pyproject_wheel + %pyproject_install (from pyproject-rpm-macros, a
+# %%pyproject_wheel + %%pyproject_install (from pyproject-rpm-macros, a
 # dependency of python3-devel in Fedora) are the distribution-standard route
 # for a PEP 517 package. They install the wheel into %{buildroot}, then
-# %py3_shebang_fix rewrites the console script's shebang from the build
+# %%py3_shebang_fix rewrites the console script's shebang from the build
 # interpreter to /usr/bin/python3 -- which is exactly what is needed here,
 # because Pulsar's /usr/bin/pulsar comes from the [project.scripts] entry
 # point and would otherwise be unusable after install. It also cleans the
@@ -22,11 +22,11 @@
 # versions also installed utils, ui and config as top-level modules, which
 # would collide with unrelated packages in site-packages.
 #
-# Version is read from pyproject.toml by %pyproject_buildrequires? No --
+# Version is read from pyproject.toml by %%pyproject_buildrequires? No --
 # deliberately not. BuildRequires: is written out by hand below so that the
 # built RPM's dependency metadata is reviewable in this file rather than
-# generated at build time. %prep asserts pyproject.toml's version matches
-# %version, so a bump in one place and not the other fails the build instead
+# generated at build time. %%prep asserts pyproject.toml's version matches
+# %%version, so a bump in one place and not the other fails the build instead
 # of producing an RPM whose filename and metadata disagree.
 
 Name:           pulsar
@@ -88,14 +88,26 @@ directory is created in the package's install prefix, so this package remains
 fully relocatable and does not need a %post script.
 
 %prep
+%autosetup -p %{name}-%{version}
+
 # Fail loudly if pyproject.toml and the spec header disagree. Version is
 # maintained in pyproject.toml; this keeps the two in step the same way
 # debian/rules does for the Debian package.
+#
+# This check MUST come after the source-unpacking line above. The tarball is
+# not unpacked until then, so running this first reads a pyproject.toml that
+# does not exist and fails the build with a misleading "version does not
+# match" -- on every platform, including Fedora.
+#
+# One more RPM trap, learned the hard way while writing this very comment:
+# RPM expands macros everywhere in a section, including inside comment text.
+# Naming a macro in prose expands it to its shell script, and the remainder
+# of that comment line then executes as shell. Refer to macros by description
+# ("the source-unpacking line"), never by their literal name in a comment.
 if [ "$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' pyproject.toml | head -1)" != "%{version}" ]; then
     echo "ERROR: version in pyproject.toml does not match %%version (%{version})" >&2
     exit 1
 fi
-%autosetup -p %{name}-%{version}
 
 %build
 # Pure Python: no compilation, no extension modules. pyproject.toml's
@@ -106,13 +118,38 @@ fi
 
 %install
 %pyproject_install
-# Consume the RECORD-generated file list into %{pyproject_files} so %files can
-# reference it, then remove the wheel's own metadata directory from the
-# package: an RPM owns its file list in %files, and shipping the wheel's
-# RECORD/dist-info as well produces an unpackaged-file failure under
-# %pyproject_save_files.
-%pyproject_save_files -l %{buildroot}%{python3_sitelib}/pulsar-*.dist-info \
-                      -e '__pyproject_save_files_mandata_ignore s|^%{buildroot}%{python3_sitelib}/pulsar-[^/]+\.dist-info/.*||'
+# Consume the RECORD-generated file list into %%{pyproject_files} so the
+# %%files section can read it with `-f`.
+#
+# The argument is a MODULE NAME GLOB -- "requests*", "kerberos" -- matched
+# against the importable module names in the RECORD, NOT a filesystem path.
+# The dist-info directory is derived from the modules it finds. Two traps,
+# both hit here first time round:
+#
+# 1. Passing a path instead. A path carries dots, and parse_varargs rejects
+#    any glob containing one because it assumes a namespaced package:
+#        ValueError: Attempted to use a namespaced package with . in the
+#        glob: .../pulsar-0.1.0.dist-info. That is not (yet) supported.
+#
+# 2. Passing a flag. The flag set is +auto/-l/-L/-M/-D and every one of them
+#    is boolean except -D, so a path after any of them is silently treated
+#    as a positional glob -- which then trips (1). With no glob left over,
+#    you get:
+#        ValueError: At least one module glob needs to be provided to
+#        %%pyproject_save_files.
+#
+# Bare "pulsar", not "pulsar*". A glob here is expanded by the shell that
+# runs the expanded macro body, in the %%install working directory -- the
+# unpacked source tree, which has src/pulsar/ but no pulsar* entry. No
+# match means the shell silently drops the word, and the macro is called
+# with no argument at all, which reports as:
+#
+#     ValueError: At least one module glob needs to be provided to
+#     %%pyproject_save_files.
+#
+# Reading as if the macro ignored its argument. The macro does not: the
+# shell ate it. A bare name has no metacharacters, so it survives intact.
+%pyproject_save_files pulsar
 
 # Nothing writable under /usr/share/pulsar: user data resolves to
 # $XDG_DATA_HOME/pulsar/presets, so a presets directory in the install prefix
@@ -123,8 +160,8 @@ fi
 # Desktop entry. The source pulsar.desktop carries
 # Exec=PLACEHOLDER_EXEC_PATH, which install.sh substitutes for a git
 # checkout. An RPM must ship a launcher that already works, so the placeholder
-# is replaced here with the path the console script is installed to. %py3_shebang_fix
-# (inside %pyproject_install) has by this point rewritten the script's shebang,
+# is replaced here with the path the console script is installed to. %%py3_shebang_fix
+# (inside %%pyproject_install) has by this point rewritten the script's shebang,
 # so /usr/bin/pulsar is a working interpreter invocation.
 install -D -m 0644 pulsar.desktop %{buildroot}%{_datadir}/applications/pulsar.desktop
 sed -i -e 's|PLACEHOLDER_EXEC_PATH|/usr/bin/pulsar|g' \
@@ -150,7 +187,13 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/pulsar.desktop
 PYTHONPATH=%{buildroot}%{python3_sitelib} \
     %{__python3} -c "import pulsar, pulsar.utils.paths, pulsar.utils.profile_manager"
 
-%files
+# -f %{pyproject_files} reads the RECORD-generated file list. A bare macro
+# name here is a PATH, not a list, so RPM looks for that absolute path
+# inside the buildroot and reports it missing:
+#
+#     error: File not found: .../BUILDROOT/...-pyproject-files
+#
+%files -f %{pyproject_files}
 %license LICENSE NOTICE
 %doc README.md CHANGELOG.md
 %{_bindir}/pulsar
@@ -164,13 +207,12 @@ PYTHONPATH=%{buildroot}%{python3_sitelib} \
 %{_datadir}/icons/hicolor/256x256/apps/pulsar.png
 %{_datadir}/icons/hicolor/512x512/apps/pulsar.png
 %{_datadir}/icons/hicolor/scalable/apps/pulsar.svg
-%pyproject_files
 
 %changelog
 * Fri Oct 16 2026 Skomesh <skomesh@users.noreply.github.com> - 0.1.0-1
 - Initial RPM packaging of Pulsar 0.1.0.
-- Built with %pyproject_wheel/%pyproject_install; installs the pulsar module
-  into %{python3_sitelib} and the /usr/bin/pulsar launcher into bindir.
+- Built with %%pyproject_wheel/%%pyproject_install; installs the pulsar module
+  into %%{python3_sitelib} and the /usr/bin/pulsar launcher into bindir.
 - Desktop entry ships with Exec already set to /usr/bin/pulsar rather than the
   PLACEHOLDER_EXEC_PATH the source template carries.
 - Requires python3-tkinter, pulseaudio-utils and pipewire-utils.

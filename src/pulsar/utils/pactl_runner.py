@@ -7,6 +7,35 @@ import subprocess
 from typing import Any, Dict, List, Optional, Tuple
 
 
+class LoopbackCycleError(Exception):
+    """Raised when a proposed route would close a feedback loop.
+
+    Carries the chain so the caller can tell the user which existing route
+    is the other half of the loop, e.g. ``['music', 'game', 'voice',
+    'music']`` -- rather than silently doing nothing and leaving them to
+    wonder why the button did nothing.
+
+    ``arrow`` is the separator used when a chain is rendered for a human.
+    It is plain ASCII on purpose. The obvious choice, U+2192 RIGHTWARDS
+    ARROW, does not render in every font a Linux desktop can resolve: on
+    this machine the default face resolves to NimbusSans-Regular.otf via
+    fontconfig, which serves a circled glyph for it instead, so the chain
+    reads as "a -> b" with blobs between the names. ASCII cannot fail
+    that way, and a route chain nobody can read is worse than one that is
+    a little less pretty.
+    """
+
+    arrow = "->"
+
+    def __init__(self, chain: List[str]):
+        self.chain = chain
+        super().__init__(f" {self.arrow} ".join(chain))
+
+    def render(self) -> str:
+        """The chain as a readable one-liner, using the safe separator."""
+        return f" {self.arrow} ".join(self.chain)
+
+
 class PactlRunner:
     """
     A class to execute PulseAudio commands and parse their output.
@@ -664,6 +693,73 @@ class PactlRunner:
         return max(5, min(500, rec))
 
     @staticmethod
+    def loopback_cycle(
+        loopbacks: List[Dict[str, str]],
+        source_monitor: str,
+        sink: str,
+    ) -> Optional[List[str]]:
+        """Return the loop that ``source_monitor -> sink`` would close.
+
+        The graph is built from the loopbacks already loaded: each one is an
+        edge from the sink whose monitor feeds it, to the sink it plays
+        into. The proposed route adds one more edge, and the question is
+        whether the target is already reachable from the source -- if it is,
+        the new edge closes a cycle and the audio feeds back into its own
+        input.
+
+        Returns the offending chain, first node repeated last, or None when
+        the route is safe::
+
+            ['music', 'game', 'voice', 'music']
+
+        A self-loop comes back as ``['game', 'game']``.
+
+        Entries whose ``source`` is not a ``.monitor`` are skipped. The old
+        post-create popup passed ``source=<sink>`` rather than
+        ``<sink>.monitor`` and the server accepted it; such an entry has no
+        identifiable origin, so it cannot contribute to a cycle.
+        """
+        if not source_monitor or not sink:
+            return None
+        if not source_monitor.endswith(".monitor"):
+            return None
+
+        source_sink = source_monitor[: -len(".monitor")]
+
+        edges: Dict[str, List[str]] = {}
+        for lb in loopbacks:
+            src = (lb.get("source") or "").strip()
+            dst = (lb.get("sink") or "").strip()
+            if not src or not dst or not src.endswith(".monitor"):
+                continue
+            edges.setdefault(src[: -len(".monitor")], []).append(dst)
+
+        # A sink routed to itself is the degenerate cycle.
+        if source_sink == sink:
+            return [source_sink, sink]
+
+        # Walk forward from the TARGET through the routes already in place.
+        # If the SOURCE turns up, the new edge source -> target closes the
+        # loop. Reporting starts at the source so it reads as "the route you
+        # asked for, then the path back", e.g. music -> game -> voice ->
+        # music.
+        path = [sink]
+        seen = {sink}
+        stack = [sink]
+        while stack:
+            node = stack.pop()
+            if node == source_sink:
+                # `path` already ends at the source, so the chain is the
+                # source, the route asked for, the path back, done.
+                return [source_sink] + path
+            for nxt in edges.get(node, ()):
+                if nxt not in seen:
+                    seen.add(nxt)
+                    path.append(nxt)
+                    stack.append(nxt)
+        return None
+
+    @staticmethod
     def create_loopback(
         source_monitor: str,
         sink: str,
@@ -697,9 +793,28 @@ class PactlRunner:
                           on light setups; raise it (100ms+) for very heavy DSP.
             logger: Optional callback function to log command execution.
 
+        Raises:
+            LoopbackCycleError: if the route would close a feedback loop.
+
         Returns:
             The loaded module ID as a string if successful, None otherwise.
         """
+        # Refuse before touching pactl. Nothing downstream reports a
+        # problem with these: the server loads a self-loop and a two-step
+        # cycle without an error or a warning, and the result is a device
+        # screaming at full volume. The check lives here rather than in the
+        # five call sites so the profile-apply path is covered too.
+        chain = PactlRunner.loopback_cycle(
+            PactlRunner.list_loopbacks(logger), source_monitor, sink
+        )
+        if chain:
+            if logger:
+                logger(
+                    f"Refused route {source_monitor} -> {sink}: "
+                    f"it would close the loop {' -> '.join(chain)}"
+                )
+            raise LoopbackCycleError(chain)
+
         cmd_args = [
             'load-module',
             'module-loopback',

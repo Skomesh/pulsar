@@ -38,6 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `dist-packages`, where they collide with other packages.
 
 ### Fixed
+- Routing can no longer create a feedback loop. A sink routed onto itself,
+  or onto a device that already has a path back to it, is now refused before
+  `pactl` is called, with the offending chain shown (`music → game → voice →
+  music`). Previously both loaded silently — no error, no warning — and the
+  result was a device at full volume.
+  - `PactlRunner.loopback_cycle` — pure graph analysis, testable without a server
+  - `PactlRunner.LoopbackCycleError` — carries the chain for the message
 - The "Route to default output?" dialog that appeared after creating a sink or
   source is gone, along with the loopback it silently created. Routing is now
   an explicit action on the Manage tab.

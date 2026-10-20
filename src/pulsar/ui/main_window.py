@@ -10,7 +10,7 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Any, Dict, List, Optional
 
 from pulsar.utils.device_names import classify_device_name, detect_device_type
-from pulsar.utils.pactl_runner import PactlRunner
+from pulsar.utils.pactl_runner import LoopbackCycleError, PactlRunner
 from pulsar.utils.preset_manager import PresetManager
 from pulsar.utils.profile_manager import ProfileManager
 from pulsar.utils.pw_app_capture import (
@@ -1606,20 +1606,34 @@ class MainWindow:
         # field AND bypassed the existing-loopback check above (which
         # looks for source == monitor). Result: clicking Route
         # multiple times created infinite duplicate loopbacks.
-        lb_id = PactlRunner.create_loopback(
-            monitor, target, latency_msec=self.get_loopback_latency_ms(),
-            logger=self.add_output,
-        )
+        lb_id = None
+        try:
+            lb_id = PactlRunner.create_loopback(
+                monitor, target, latency_msec=self.get_loopback_latency_ms(),
+                logger=self.add_output,
+            )
+        except LoopbackCycleError as exc:
+            # Refusing loudly beats a feedback loop at full volume. Show the
+            # chain so the user can see which existing route is the other
+            # half and drop it on the Manage tab.
+            messagebox.showerror(
+                "Would create a feedback loop",
+                f"Routing '{app_str}' to '{target}' would close this loop:\n\n"
+                f"    {exc.render()}\n\n"
+                "That would feed the audio back into its own input. Remove "
+                "one of those routes on the Manage tab first.",
+            )
+            return
         if lb_id:
             if removed:
                 self.add_output(
                     f"Rerouted '{app_str}' (via {sink_name}): "
-                    f"removed old route(s) to {', '.join(removed)} → "
+                    f"removed old route(s) to {', '.join(removed)} -> "
                     f"now on '{target}' (loopback #{lb_id})"
                 )
             else:
                 self.add_output(
-                    f"Routed '{app_str}' (via {sink_name}) → '{target}' "
+                    f"Routed '{app_str}' (via {sink_name}) -> '{target}' "
                     f"(loopback #{lb_id})"
                 )
             self.refresh_all_views()
@@ -1739,7 +1753,7 @@ class MainWindow:
             return
 
         self.add_output(
-            f"{app_str}: exclusive output moved {previous} → {target} "
+            f"{app_str}: exclusive output moved {previous} -> {target} "
             f"(sink-input #{stream['index']})"
         )
         self.status_var.set(
@@ -2077,7 +2091,7 @@ class MainWindow:
                 self.output_text.insert(tk.END, f"\n[{timestamp}] {text}\n")
             elif text.startswith("Command ") or text.startswith("Error:") or text.startswith("Output:"):
                 # Command result - indent slightly
-                self.output_text.insert(tk.END, f"  → {text}\n")
+                self.output_text.insert(tk.END, f"  -> {text}\n")
             else:
                 # Regular application message
                 self.output_text.insert(tk.END, text + "\n")
@@ -2834,11 +2848,23 @@ class MainWindow:
         for t in target_outputs:
             if t in existing:
                 continue
-            mod = PactlRunner.create_loopback(
-                monitor, t,
-                latency_msec=self.get_loopback_latency_ms(),
-                logger=self.add_output,
-            )
+            try:
+                mod = PactlRunner.create_loopback(
+                    monitor, t,
+                    latency_msec=self.get_loopback_latency_ms(),
+                    logger=self.add_output,
+                )
+            except LoopbackCycleError as exc:
+                # One bad target must not abort the ones that are fine --
+                # multi-routing is a list of independent routes.
+                messagebox.showerror(
+                    "Would create a feedback loop",
+                    f"Routing '{sink}' to '{t}' would close this loop:\n\n"
+                    f"    {exc.render()}\n\n"
+                    "That target was skipped. Remove one of those routes "
+                    "on the Manage tab first.",
+                )
+                continue
             if mod:
                 added.append(t)
         if added:
@@ -2935,7 +2961,7 @@ class MainWindow:
         if current and current.get("sink") in outputs:
             self.routing_output_var.set(current["sink"])
             self.routing_status_var.set(
-                f"Currently routing '{sink_name}' → '{current['sink']}' "
+                f"Currently routing '{sink_name}' -> '{current['sink']}' "
                 f"(loopback module #{current['id']})"
             )
             self.route_button.config(state="normal")
@@ -3234,7 +3260,7 @@ class MainWindow:
         ) if card else False
         if ok:
             self.add_output(
-                f"Card profile switched: {sink_desc} → {profile_name}"
+                f"Card profile switched: {sink_desc} -> {profile_name}"
             )
             self.refresh_all_views()
         else:
@@ -3322,19 +3348,29 @@ class MainWindow:
             if lb.get("source") == monitor:
                 PactlRunner.unload_loopback(lb["id"])
 
-        lb_id = PactlRunner.create_loopback(
-            monitor, target, latency_msec=self.get_loopback_latency_ms(),
-            logger=self.add_output,
-        )
+        lb_id = None
+        try:
+            lb_id = PactlRunner.create_loopback(
+                monitor, target, latency_msec=self.get_loopback_latency_ms(),
+                logger=self.add_output,
+            )
+        except LoopbackCycleError as exc:
+            messagebox.showerror(
+                "Would create a feedback loop",
+                f"Routing '{sink_name}' to '{target}' would close this loop:\n\n"
+                f"    {exc.render()}\n\n"
+                "Remove one of those routes first.",
+            )
+            return
         if lb_id is None:
             self.add_output(f"Failed to create loopback from {monitor} to {target}")
             messagebox.showerror("Routing error", "pactl refused the loopback command")
             return
 
         self.add_output(
-            f"Routing '{sink_name}' → '{target}' (loopback module #{lb_id})"
+            f"Routing '{sink_name}' -> '{target}' (loopback module #{lb_id})"
         )
-        self.status_var.set(f"Routed '{sink_name}' → '{target}'")
+        self.status_var.set(f"Routed '{sink_name}' -> '{target}'")
         self.refresh_all_views()
         # Re-select the same sink to refresh the routing panel state
         self._reselect_after_refresh(sink_name)
@@ -3424,10 +3460,23 @@ class MainWindow:
         for target in selected_targets:
             if target in existing_targets:
                 continue  # Already routed to this target
-            lb_id = PactlRunner.create_loopback(
-                monitor, target, latency_msec=self.get_loopback_latency_ms(),
-                logger=self.add_output,
-            )
+            try:
+                lb_id = PactlRunner.create_loopback(
+                    monitor, target, latency_msec=self.get_loopback_latency_ms(),
+                    logger=self.add_output,
+                )
+            except LoopbackCycleError as exc:
+                # Each target is an independent route; skip this one and
+                # carry on with the rest rather than aborting the batch.
+                messagebox.showerror(
+                    "Would create a feedback loop",
+                    f"Routing '{sink_name}' to '{target}' would close this "
+                    f"loop:\n\n    {exc.render()}\n\n"
+                    "That target was skipped. Remove one of those routes "
+                    "on the Manage tab first.",
+                )
+                failed.append(f"cycle {target}")
+                continue
             if lb_id is not None:
                 created.append(target)
             else:
@@ -3436,11 +3485,11 @@ class MainWindow:
         # Report
         if created:
             self.add_output(
-                f"Multi-routing '{sink_name}' → {', '.join(sorted(created))}"
+                f"Multi-routing '{sink_name}' -> {', '.join(sorted(created))}"
             )
         if removed:
             self.add_output(
-                f"Stopped routing '{sink_name}' → {', '.join(sorted(removed))}"
+                f"Stopped routing '{sink_name}' -> {', '.join(sorted(removed))}"
             )
         if failed:
             self.add_output(
@@ -3482,7 +3531,7 @@ class MainWindow:
             if PactlRunner.unload_loopback(lb["id"]):
                 unloaded += 1
                 self.add_output(
-                    f"Stopped routing '{sink_name}' → '{lb.get('sink')}' "
+                    f"Stopped routing '{sink_name}' -> '{lb.get('sink')}' "
                     f"(unloaded #{lb['id']})"
                 )
         self.status_var.set(

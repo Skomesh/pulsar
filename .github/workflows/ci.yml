@@ -214,6 +214,22 @@ jobs:
           print(f'built-in profiles load from installed wheel: {n}')
           "
 
+      - name: Check packaging metadata agrees across formats
+        # Five formats means five copies of the version, the summary and the
+        # dependency list, in five syntaxes. They drift silently. This is
+        # the gate: bump pyproject.toml without the changelog or the spec and
+        # it fails here rather than shipping a mislabelled artifact.
+        #
+        # It also guards the dependency-name trap -- `pipewire` vs
+        # `pipewire-bin` vs `pipewire-utils` -- which is invisible until a
+        # user finds the pw-* tools missing.
+        run: python3 scripts/check_packaging_consistency.py
+
+      - name: Check debian/rules
+        # `bash -n` on this file is meaningless: it is a Makefile. This
+        # validates make structure and parses each recipe body as shell.
+        run: python3 scripts/check_debian_rules.py
+
       - name: Run tests
         # Allow the absence of a tests/ tree for now (project is pre-alpha).
         # If tests/ exists and has at least one test file, run pytest normally

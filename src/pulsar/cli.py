@@ -60,6 +60,118 @@ def table(rows: List[List[str]], headers: List[str]) -> str:
     return "\n".join(out)
 
 
+#: Alias so tests can wrap `table` and still produce real output.
+render_table = table
+
+
+# --------------------------------------------------------------------------
+# Picking a sink without typing its exact name
+# --------------------------------------------------------------------------
+
+def stdin_is_a_tty() -> bool:
+    """True when there is a human to ask.
+
+    Checked rather than assumed, because a CLI that prompts inside a
+    pipeline hangs forever. `pulsar route game hdmi | tee log` has no
+    terminal on stdin and must fail loudly instead of waiting.
+    """
+    try:
+        return sys.stdin.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def choose_interactively(items: List[Dict[str, Any]], prompt: str) -> Optional[Dict[str, Any]]:
+    """Show a numbered list and return the chosen item, or None.
+
+    Returns None rather than raising on EOF: Ctrl-D at the prompt means
+    "never mind", and an unhandled EOFError from a terminal is a crash the
+    user did nothing to deserve.
+    """
+    if not items:
+        return None
+
+    print(prompt)
+    print(render_table(
+        [[str(i + 1), it.get("name", "?"), it.get("description", ""),
+          it.get("state", "")] for i, it in enumerate(items)],
+        ["#", "NAME", "DESCRIPTION", "STATE"],
+    ))
+
+    while True:
+        try:
+            answer = input("Number (or blank to cancel): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+        if not answer:
+            return None
+        try:
+            index = int(answer)
+        except ValueError:
+            print(f"Not a number: {answer!r}")
+            continue
+        if 1 <= index <= len(items):
+            return items[index - 1]
+        print(f"Out of range -- pick 1 to {len(items)}.")
+
+
+def resolve_sink(name: str, interactive: Optional[bool] = None,
+                 sinks: Optional[List[Dict[str, Any]]] = None) -> Optional[str]:
+    """Resolve what the user typed to a real sink name, or None.
+
+    Escalating strategies, cheapest first:
+
+      1. exact name
+      2. case-insensitive exact
+      3. unique substring
+
+    Only when more than one sink survives does it ask, and only if there is
+    a terminal. Guessing between two candidates would be worse than asking:
+    `pulsar route sink hdmi` picking `bluez_sink` because it came first
+    would silently send audio to the wrong device.
+
+    Returns None for "no match" and for "ambiguous and non-interactive" --
+    the caller reports both, and the distinction only matters for the
+    message, not the exit code.
+    """
+    if sinks is None:
+        sinks = PactlRunner.list_sinks()
+
+    names = [s.get("name", "") for s in sinks]
+
+    if name in names:
+        return name
+
+    lowered = name.lower()
+    for candidate in names:
+        if candidate.lower() == lowered:
+            return candidate
+
+    matches = [s for s in sinks if lowered in s.get("name", "").lower()]
+    if len(matches) == 1:
+        return matches[0]["name"]
+    if not matches:
+        return None
+
+    if interactive is None:
+        interactive = stdin_is_a_tty()
+    if not interactive:
+        return None
+
+    picked = choose_interactively(matches, f"'{name}' matches several sinks:")
+    return picked["name"] if picked else None
+
+
+def format_ambiguous(name: str, matches: List[Dict[str, Any]]) -> str:
+    """The message for an ambiguous name that cannot be resolved."""
+    lines = [f"'{name}' matches {len(matches)} sinks:"]
+    for i, m in enumerate(matches, 1):
+        lines.append(f"  {i}. {m.get('name', '?')}  {m.get('description', '')}")
+    lines.append("Use the full name, or run from a terminal to pick from a list.")
+    return "\n".join(lines)
+
+
 def mute_word(muted: Optional[bool]) -> str:
     return "yes" if muted else "no" if muted is not None else "-"
 
@@ -113,6 +225,29 @@ def cmd_list_routes(args) -> int:
     return EXIT_OK
 
 
+def resolve_or_report(name: str, role: str, args) -> Optional[str]:
+    """Resolve a user-supplied sink name, or print why it failed.
+
+    Prints the ambiguous list when that is the problem, because "no such
+    sink" for a name that matches three real ones is useless advice.
+    """
+    sinks = PactlRunner.list_sinks()
+    resolved = resolve_sink(name, sinks=sinks)
+
+    if resolved:
+        return resolved
+
+    lowered = name.lower()
+    matches = [s for s in sinks if lowered in s.get("name", "").lower()]
+    if matches:
+        print(format_ambiguous(name, matches), file=sys.stderr)
+    else:
+        print(f"Error: no sink matching '{name}' (the {role}).", file=sys.stderr)
+        print("Run `pulsar list sinks` to see what is available.",
+              file=sys.stderr)
+    return None
+
+
 def cmd_route(args) -> int:
     """Route a sink's monitor into a target sink.
 
@@ -122,11 +257,16 @@ def cmd_route(args) -> int:
     directly would be a hole straight past the thing that stops a device
     screaming at full volume.
     """
-    sink, target = args.sink, args.target
+    sink = resolve_or_report(args.sink, "source", args)
+    if not sink:
+        return EXIT_ERROR
+    target = resolve_or_report(args.target, "target", args)
+    if not target:
+        return EXIT_ERROR
 
     monitor = PactlRunner.monitor_source_for(sink)
     if not monitor:
-        print(f"Error: no sink named '{sink}'.", file=sys.stderr)
+        print(f"Error: no monitor source for sink '{sink}'.", file=sys.stderr)
         return EXIT_ERROR
 
     try:

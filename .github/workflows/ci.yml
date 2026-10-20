@@ -87,8 +87,9 @@ jobs:
       - name: Build and install the wheel
         # This is the step that catches packaging breakage. `pip install -e .`
         # above never produces a wheel, so a broken pyproject (missing
-        # main.py entry point, presets not declared as package data, a
-        # console-script pointing at a function that does not exist) is
+        # __main__ entry point, presets not declared as package data, a
+        # console-script pointing at a function that does not exist, or
+        # generic top-level modules leaking out of src/) is
         # invisible to the rest of this workflow. Build for real, install
         # into a clean venv, and import the console script.
         #
@@ -141,10 +142,31 @@ jobs:
           else:
               print(z.read(entry[0]).decode().strip())
 
-          # main.py must be an importable top-level module, or the
-          # `pulsar` console script cannot resolve.
-          if not any(n == "main.py" for n in names):
-              errors.append("main.py is not in the wheel, so `pulsar` cannot resolve")
+          # The console script points at pulsar.__main__:main, so that module
+          # has to be in the wheel or `pulsar` cannot resolve. This used to
+          # assert on top-level `main.py`, which was correct before the app
+          # moved into a `pulsar` package.
+          if not any(n == "pulsar/__main__.py" for n in names):
+              errors.append(
+                  "pulsar/__main__.py is not in the wheel, so `pulsar` cannot resolve"
+              )
+
+          # top_level.txt must name only `pulsar`. If generic names like
+          # `utils` or `config` reappear at the top level, a distro package
+          # would install them into system dist-packages where they collide
+          # with other packages. This is the Gate B check.
+          tl = [n for n in names if n.endswith("top_level.txt")]
+          if not tl:
+              errors.append("wheel has no top_level.txt")
+          else:
+              top = z.read(tl[0]).decode().split()
+              print("top_level:", top)
+              if top != ["pulsar"]:
+                  errors.append(
+                      "top_level.txt is %s, expected only ['pulsar']; "
+                      "generic top-level modules collide in distro installs"
+                      % top
+                  )
 
           # The preset data must actually ship as a .json payload.
           data = [n for n in names if n.endswith(".json")]
@@ -170,8 +192,8 @@ jobs:
           # Import from outside the repo so the source tree cannot satisfy it.
           cd /tmp
           /tmp/smoke/bin/python -c "
-          import main
-          assert hasattr(main, 'main'), 'main.main is missing'
+          from pulsar.__main__ import main
+          assert callable(main), 'pulsar.__main__.main is missing'
           print('console entry point importable: OK')
           "
 
@@ -185,7 +207,7 @@ jobs:
           cd /tmp
           /tmp/smoke/bin/python -c "
           import tempfile
-          from utils.profile_manager import ProfileManager
+          from pulsar.utils.profile_manager import ProfileManager
           pm = ProfileManager(presets_dir=tempfile.mkdtemp())
           n = len(pm._load_builtin())
           assert n > 0, 'installed package loaded ZERO built-in profiles'
@@ -210,7 +232,7 @@ jobs:
         # data and no longer tracked -- the check was dead code.
         run: |
           set -euo pipefail
-          for f in src/utils/presets/*.json; do
+          for f in src/pulsar/utils/presets/*.json; do
             python3 -c "import json,sys; json.load(open('$f'))"
             echo "valid: $f"
           done

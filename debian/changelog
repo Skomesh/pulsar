@@ -1,0 +1,42 @@
+pulsar (0.1.0-1) unstable; urgency=medium
+
+  * Initial Debian release.
+  * Installs the pulsar Python module into the system dist-packages and the
+    /usr/bin/pulsar launcher built from the [project.scripts] entry point.
+  * Ships a .desktop entry with Exec already set to the installed binary
+    rather than the PLACEHOLDER_EXEC_PATH the source template carries, so
+    menu launchers work for anyone installing from the package.
+  * Installs the icon set into the hicolor theme layout.
+  * Depends on python3-tk (tkinter is imported at start-up), pulseaudio-utils
+    (pactl) and pipewire (pw-dump, pw-top, pw-record).
+
+ -- Skomesh <skomesh@users.noreply.github.com>  Fri, 16 Oct 2026 00:00:00 +0000
+
+# RELEASE PROCEDURE / VERSION SINGLE SOURCE OF TRUTH
+#
+# The upstream version lives in exactly one place: the `version` key of
+# [project] in pyproject.toml. debian/changelog carries a copy of it only
+# because dpkg has nowhere else to read a package version from.
+#
+# To cut a release:
+#
+#   1. Update CHANGELOG.md and bump `version` in pyproject.toml.
+#   2. Run `dch -v <new version>` and edit the generated entry. `dch` stamps
+#      the RFC 2822 date and the maintainer address for you; keep the trailing
+#      "-- Name <address>  Date" trailer line, dpkg-parsechangelog needs it.
+#   3. Tag the git repository with the same version and build the orig tarball
+#      so debian/source/format's "3.0 (quilt)" resolves:
+#          git archive --format=tar.gz --prefix=pulsar-<version>/ \
+#              -o ../pulsar_<version>.orig.tar.gz v<version>
+#   4. Build:  dpkg-buildpackage -us -uc -b   (or use the full -S for a .dsc)
+#
+# Step 2 is the only error-prone one, so debian/rules contains a guard in
+# override_dh_auto_build that compares `version` from pyproject.toml against
+# the upstream version in this file and fails the build on a mismatch. A
+# forgotten changelog bump stops the build; it does not produce a .deb whose
+# filename says one version and whose METADATA says another.
+#
+# Note the first stanza uses revision -1: 0.1.0-1 is the first Debian
+# packaging of upstream 0.1.0. Upstream version and Debian revision are
+# distinct fields and must not be conflated -- the guard compares upstream
+# versions only, stripping the Debian revision.

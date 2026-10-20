@@ -7,9 +7,9 @@ A long-term roadmap for evolving the Pulsar fork from pactl-gui's MVP into a str
 ## Current State (baseline, post-fork)
 
 **Inherited from pactl-gui (3,338 LOC of Python+Tkinter):**
-- `src/utils/pactl_runner.py` (382 lines) — wraps `pactl` subprocess calls; can list sinks/sources/modules, create duplex sinks, unload modules
-- `src/utils/preset_manager.py` (192 lines) — saves/loads presets as JSON; supports 5 built-in channel configurations (Stereo/Mono/5.1/7.1/Custom)
-- `src/ui/main_window.py` (2,723 lines) — single Tkinter window with three tabs: Create / Manage / Output
+- `pulsar/utils/pactl_runner.py` (382 lines) — wraps `pactl` subprocess calls; can list sinks/sources/modules, create duplex sinks, unload modules
+- `pulsar/utils/preset_manager.py` (192 lines) — saves/loads presets as JSON; supports 5 built-in channel configurations (Stereo/Mono/5.1/7.1/Custom)
+- `pulsar/ui/main_window.py` (2,723 lines) — single Tkinter window with three tabs: Create / Manage / Output
 - **Limitations:** creates only duplex (sink+source) devices, no Sink-vs-Source choice; no `module-loopback` support at all; preset loading is wired up but doesn't recreate routing; no concept of "profile" or "topology"
 
 **Environment:**

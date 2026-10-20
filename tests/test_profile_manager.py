@@ -13,8 +13,8 @@ import shutil
 import tempfile
 import unittest
 
-from utils.pactl_runner import PactlRunner
-from utils.profile_manager import (
+from pulsar.utils.pactl_runner import PactlRunner
+from pulsar.utils.profile_manager import (
     CURRENT_SCHEMA_VERSION,
     DEFAULT_SINK_SENTINEL,
     ProfileError,

@@ -2,16 +2,17 @@
 Type=Application
 Version=1.0
 Name=Pulsar
-GenericName=Audio Control
-Comment=Graphical audio routing manager
+GenericName=Audio Routing
+Comment=Graphical audio routing manager for PulseAudio and PipeWire
 Exec=PLACEHOLDER_EXEC_PATH
-Icon=audio-card
+Icon=pulsar
 Terminal=false
-Categories=AudioVideo;Audio;Settings;
-Keywords=sound;audio;volume;pulseaudio;pulse;mixer;
+Categories=AudioVideo;Audio;Settings;Mixer;
+Keywords=sound;audio;volume;pulseaudio;pipewire;routing;loopback;mixer;streamer;
 StartupNotify=true
 X-KDE-SubstituteUID=false
 X-KDE-StartupNotify=true
 
-# This is a template file used during installation
-# The actual desktop file will be generated with correct paths by install.sh
+# install.sh rewrites PLACEHOLDER_EXEC_PATH with the launcher it installed.
+# Distribution packages (deb, rpm, snap, flatpak, AppImage) ship a copy with
+# Exec already set to the packaged binary and do not use this template.

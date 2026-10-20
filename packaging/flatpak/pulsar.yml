@@ -1,0 +1,260 @@
+# Flatpak manifest for Pulsar — graphical audio routing manager for
+# PulseAudio/PipeWire.
+#
+# Build:
+#     flatpak-builder --user --install --force-clean build packaging/flatpak/pulsar.yml
+#
+# ---------------------------------------------------------------------------
+# IDENTITY PLACEHOLDER — REPLACE BEFORE PUBLISHING TO FLATHUB
+# ---------------------------------------------------------------------------
+# `app-id` must be a reverse-DNS id that you control and that is not already
+# taken on Flathub. The value below is a placeholder. Changing the app-id means
+# changing it here, in `id`, and in the appstream/com.metainfo file name.
+#
+# `branch` (default is stable) selects the runtime branch. This file targets
+# 24.08; see net/linux-unstable/pulsar.yml for the rolling variant.
+#
+# NOTHING in this repository uploads anywhere. Publishing requires a Flathub
+# account and a separate submission PR against flathub/<app-id>; none of that
+# is attempted or implied here.
+
+app-id: io.github.skomesh.pulsar
+
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+# Quoted on purpose: YAML would otherwise read 24.08 as a float and render it
+# back as "24.08" only by luck. Flatpak wants the exact string.
+command: pulsar
+
+finish-args:
+  # -------------------------------------------------------------------------
+  # HARDWARE ACCESS — the part that decides whether this app works at all
+  # -------------------------------------------------------------------------
+  # PulseAudio/PipeWire runs OUTSIDE the sandbox. There is NO audio plug in
+  # flatpak (that vocabulary is snap-specific). The only supported route is
+  # granting access to the host's per-user PulseAudio socket directory:
+  #
+  #   $XDG_RUNTIME_DIR/pulse/native  (typically /run/user/1000/pulse/native)
+  #
+  # `--filesystem=xdg-run/pulse` resolves to flatpak_get_real_xdg_runtime_dir()
+  # + "/pulse". Confirmed by reading flatpak's own parser
+  # (common/flatpak-context.c): "xdg-run" is accepted only WITH a suffix
+  # ("Don't support xdg-run without suffix, because that doesn't work"), and
+  # any suffix maps to the real runtime dir. So `xdg-run/pulse` is exactly the
+  # right spelling. Read-write (no `:ro`) because the PulseAudio cookie and
+  # shm live under there.
+  - --filesystem=xdg-run/pulse
+
+  # Native PipeWire socket, for the pw-dump / pw-top diagnostics. Same socket
+  # family, different file: $XDG_RUNTIME_DIR/pipewire-0. Verified socket name
+  # from snapd's pipewire interface AppArmor snippet (/run/user/[0-9]*/pipewire-[0-9]).
+  - --filesystem=xdg-run/pipewire-0
+
+  # ---- display ----------------------------------------------------------
+  # Tk needs a display server. Under Wayland the compositor is reached over
+  # the wayland socket; under X11 (including XWayland) over the X socket.
+  # Both are requested because we cannot know which the session uses.
+  - --socket=wayland
+  - --socket=fallback-x11
+
+  # GPU / hardware rendering for the Tk canvas. Harmless when unused.
+  - --device=dri
+
+  # ---- xdg-desktop-portal (per-app audio capture) ------------------------
+  # pw_app_capture.py drives org.freedesktop.portal.ScreenCast over the session
+  # bus to get a PipeWire remote FD for per-application capture. The portal is
+  # a well-known name on the session bus, so it needs an explicit allow.
+  # NOT `org.freedesktop.portal.*`: flatpak does not support `*` in
+  # --talk-name (it matches exact bus names, and the portal also requires a
+  # document portal / InputCapture handshake for some operations).
+  # The app degrades gracefully when this is denied: portal_available() is a
+  # shutil.which("gdbus") probe and the feature is hidden.
+  - --talk-name=org.freedesktop.portal.Desktop
+
+  # ---- user data --------------------------------------------------------
+  # DELIBERATELY NO PERMISSION HERE. This is issue #9.
+  #
+  # The app resolves all user data through src/pulsar/utils/paths.py ->
+  # user_data_dir(), which returns $XDG_DATA_HOME/pulsar/presets (falling back
+  # to ~/.local/share/pulsar/presets). Inside a flatpak, XDG_DATA_HOME points
+  # at the app's own private ~/.var/app/<app-id>/data, which is writable
+  # WITHOUT any --filesystem grant. Adding one would be both unnecessary and
+  # a real over-permission.
+  #
+  # The bug this guards against: the app used to resolve `presets/` relative
+  # to the working directory. In a flatpak the CWD is the read-only /app
+  # bundle, so the first write attempt raised EROFS/EACCES and the app died at
+  # startup. The packaging therefore must never set a CWD, `WorkingDirectory`,
+  # or a relative path that would steer data back to /app. Verified: the only
+  # remaining CWD reference in the tree is paths.py's legacy_presets_dir(),
+  # which is read-only (it `is_dir()`-checks a path to import old presets) and
+  # is never written to.
+
+modules:
+  # -------------------------------------------------------------------------
+  # tkinter — MANDATORY, and NOT provided by the runtime.
+  # -------------------------------------------------------------------------
+  # Verified against the freedesktop SDK build definitions
+  # (gitlab.com/freedesktop-sdk/freedesktop-sdk, elements/components/python3.bst)
+  # on branches 23.08, 24.08 and 25.08: the Python build explicitly runs
+  #     rm -rf %{install-root}%{indep-libdir}/python*/tkinter
+  #     rm -rf %{install-root}%{indep-libdir}/python*/turtle*
+  # so `import tkinter` fails inside a stock freedesktop runtime. (Upstream MR
+  # !4569 "Include tkinter module for Python" was closed without merging.)
+  #
+  # tkinter-standalone is the workaround used by shipped Flathub apps
+  # (org.thonny.Thonny, org.inkscape.Inkscape). It builds the _tkinter C
+  # extension against the runtime's own interpreter and its own Tcl/Tk, and is
+  # pinned to a commit rather than a branch so a rebuild is reproducible.
+  - name: tkinter
+    buildsystem: simple
+    build-commands:
+      - pip3 install --prefix=${FLATPAK_DEST} --no-build-isolation .
+    sources:
+      - type: git
+        url: https://github.com/iwalton3/tkinter-standalone
+        commit: 4f5cfe3cdd1f58cd4e136fd66d4e5e27d21d820b
+    modules:
+      - name: tcl
+        buildsystem: autotools
+        subdir: unix
+        post-install:
+          - chmod +w ${FLATPAK_DEST}/lib/libtcl*.so
+        build-options:
+          # Tcl < 9 has a UTF-8 encoding bug that breaks tkinter's unicode
+          # handling. Same workaround as the Thonny manifest.
+          cflags: -DTCL_UTF_MAX=4
+        cleanup:
+          - /bin
+          - /lib/pkgconfig
+          - /man
+        sources:
+          - type: archive
+            url: https://prdownloads.sourceforge.net/tcl/tcl8.6.15-src.tar.gz
+            sha256: 861e159753f2e2fbd6ec1484103715b0be56be3357522b858d3cbb5f893ffef1
+      - name: tk
+        buildsystem: autotools
+        subdir: unix
+        post-install:
+          - chmod +w ${FLATPAK_DEST}/lib/libtcl*tk*.so
+        build-options:
+          cflags: -DTCL_UTF_MAX=4
+        cleanup:
+          - /bin
+          - /lib/pkgconfig
+          - /man
+        sources:
+          - type: archive
+            url: https://prdownloads.sourceforge.net/tcl/tk8.6.15-src.tar.gz
+            sha256: 550969f35379f952b3020f3ab7b9dd5bfd11c1ef7c9b7c6a75f5c49aca793fec
+
+  # -------------------------------------------------------------------------
+  # gdbus — optional, for the portal capture path.
+  # -------------------------------------------------------------------------
+  # The runtime's dbus-tools component (elements/components/dbus-tools.bst,
+  # split "dbus-tools") ships gdbus. So strictly this module is redundant.
+  # It is NOT declared, to keep the manifest honest: adding a module that
+  # duplicates the runtime is noise. If a future runtime drops gdbus, the fix
+  # is to add a libglib2.0-bin module here, and the app already degrades
+  # gracefully without it (pw_app_capture.portal_available() probes for it).
+  #
+  # -------------------------------------------------------------------------
+  # pactl and the pw-* tools come FROM THE RUNTIME — verified, not assumed:
+  #
+  #   * pactl: elements/components/libpulse.bst builds PulseAudio with
+  #     -Ddaemon=false but leaves the `client` option on, and
+  #     src/utils/meson.build builds+installs `pactl` under
+  #     `if get_option('client')`. The runtime's libpulse split keeps the
+  #     binaries (only the devel split strips the .so files). => pactl present.
+  #
+  #   * pw-dump / pw-top / pw-record: elements/components/pipewire.bst is a
+  #     filter over components/_private/pipewire-base.bst that excludes only
+  #     the `daemon` split. The daemon split takes '%{bindir}/pipewire*' (the
+  #     daemon binaries) — the pw-* client utilities are NOT in that split, so
+  #     they remain in the runtime. => pw-dump, pw-top, pw-record present.
+  #
+  # If you ever need to double-check after a runtime bump:
+  #   flatpak run --command=sh <app-id> -c 'command -v pactl pw-dump pw-top'
+  # -------------------------------------------------------------------------
+
+  - name: pulsar
+    buildsystem: simple
+    build-commands:
+      # pyproject.toml declares `dependencies = []`. There is no pip install to
+      # do: the package is pure stdlib + tkinter and is run from source inside
+      # /app. Copying the tree keeps builtin_profiles.json (package-data,
+      # declared in pyproject.toml) next to the code that reads it, which is
+      # what utils/profile_manager.py expects.
+      - install -d /app/pulsar
+      - cp -r src/pulsar/. /app/pulsar/
+      - install -d /app/bin
+      # `python3 -m pulsar` needs /app on sys.path. The launcher sets
+      # PYTHONPATH rather than relying on CWD, so the app can never be
+      # started from an arbitrary directory (see issue #9 reasoning above).
+      - |
+        cat > /app/bin/pulsar <<'LAUNCHER'
+        #!/bin/sh
+        export PYTHONPATH="/app${PYTHONPATH:+:$PYTHONPATH}"
+        exec python3 -m pulsar "$@"
+        LAUNCHER
+      - chmod +x /app/bin/pulsar
+
+      # ---- desktop entry -------------------------------------------------
+      # Authored here rather than reusing the repo's pulsar.desktop, which is
+      # a TEMPLATE whose Exec line is the literal placeholder
+      # PLACEHOLDER_EXEC_PATH (install.sh rewrites it at install time).
+      # Shipping that unmodified would exec a file that does not exist.
+      - install -d /app/share/applications
+      - |
+        cat > /app/share/applications/io.github.skomesh.pulsar.desktop <<'DESKTOP'
+        [Desktop Entry]
+        Type=Application
+        Version=1.0
+        Name=Pulsar
+        GenericName=Audio Routing
+        Comment=Graphical audio routing manager for PulseAudio and PipeWire
+        Exec=pulsar
+        Icon=io.github.skomesh.pulsar
+        Terminal=false
+        Categories=AudioVideo;Audio;Settings;Mixer;
+        Keywords=sound;audio;volume;pulseaudio;pipewire;routing;loopback;mixer;streamer;
+        StartupNotify=true
+        DESKTOP
+
+      # ---- icons ---------------------------------------------------------
+      # Both the scalable SVG and the PNG rasters, under a proper freedesktop
+      # icon theme path so toolkits find them by size. Without this, a
+      # flatpak shows a generic placeholder icon.
+      - install -d /app/share/icons/hicolor/scalable/apps
+      - install -m 0644 assets/icons/pulsar.svg /app/share/icons/hicolor/scalable/apps/io.github.skomesh.pulsar.svg
+      - install -d /app/share/icons/hicolor/16x16/apps
+      - install -m 0644 assets/icons/pulsar-16.png /app/share/icons/hicolor/16x16/apps/io.github.skomesh.pulsar.png
+      - install -d /app/share/icons/hicolor/24x24/apps
+      - install -m 0644 assets/icons/pulsar-24.png /app/share/icons/hicolor/24x24/apps/io.github.skomesh.pulsar.png
+      - install -d /app/share/icons/hicolor/32x32/apps
+      - install -m 0644 assets/icons/pulsar-32.png /app/share/icons/hicolor/32x32/apps/io.github.skomesh.pulsar.png
+      - install -d /app/share/icons/hicolor/48x48/apps
+      - install -m 0644 assets/icons/pulsar-48.png /app/share/icons/hicolor/48x48/apps/io.github.skomesh.pulsar.png
+      - install -d /app/share/icons/hicolor/64x64/apps
+      - install -m 0644 assets/icons/pulsar-64.png /app/share/icons/hicolor/64x64/apps/io.github.skomesh.pulsar.png
+      - install -d /app/share/icons/hicolor/128x128/apps
+      - install -m 0644 assets/icons/pulsar-128.png /app/share/icons/hicolor/128x128/apps/io.github.skomesh.pulsar.png
+      - install -d /app/share/icons/hicolor/256x256/apps
+      - install -m 0644 assets/icons/pulsar-256.png /app/share/icons/hicolor/256x256/apps/io.github.skomesh.pulsar.png
+      - install -d /app/share/icons/hicolor/512x512/apps
+      - install -m 0644 assets/icons/pulsar-512.png /app/share/icons/hicolor/512x512/apps/io.github.skomesh.pulsar.png
+
+      # ---- metainfo ------------------------------------------------------
+      # appstream metadata is required for Flathub listing, but the repo does
+      # not ship one yet. Generated only if the source file exists, so the
+      # build does not fail on a fresh checkout.
+      - |
+        if [ -f assets/metainfo/io.github.skomesh.pulsar.metainfo.xml ]; then
+          install -d /app/share/metainfo
+          install -m 0644 assets/metainfo/io.github.skomesh.pulsar.metainfo.xml \
+            /app/share/metainfo/io.github.skomesh.pulsar.metainfo.xml
+        fi
+    sources:
+      - type: dir
+        path: ../..

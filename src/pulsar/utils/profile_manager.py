@@ -55,12 +55,22 @@ import json
 import os
 import re
 import shlex
+import shutil
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from utils.pactl_runner import PactlRunner
+from pulsar.utils.pactl_runner import PactlRunner
+from pulsar.utils.paths import legacy_presets_dir, user_presets_dir
 
 CURRENT_SCHEMA_VERSION = 2
+
+#: Profiles have their own file. This used to be "user_presets.json", shared
+#: with PresetManager despite being a different schema, so one manager's save
+#: could silently discard the other's data.
+USER_PROFILES_FILENAME = "routing_profiles.json"
+
+#: The pre-XDG shared filename, read once during migration.
+LEGACY_USER_PRESETS_FILENAME = "user_presets.json"
 
 # Sentinel used in a profile's routing[].to to mean "use the user's current
 # default sink at apply time". This lets us ship profiles that work on any
@@ -92,10 +102,13 @@ class ProfileManager:
     top-level keys. v1 entries are auto-migrated to empty v2 profiles on load.
     """
 
-    def __init__(self, presets_dir: str = "presets"):
-        self.presets_dir = presets_dir
-        self.presets_file = os.path.join(presets_dir, "user_presets.json")
+    def __init__(self, presets_dir: Optional[str] = None):
+        self.presets_dir = (
+            str(presets_dir) if presets_dir else str(user_presets_dir())
+        )
+        self.presets_file = os.path.join(self.presets_dir, USER_PROFILES_FILENAME)
         self._ensure_presets_dir()
+        self._migrate_legacy()
 
     # ------------------------------------------------------------------
     # Filesystem helpers
@@ -103,6 +116,26 @@ class ProfileManager:
 
     def _ensure_presets_dir(self):
         os.makedirs(self.presets_dir, exist_ok=True)
+
+    def _migrate_legacy(self):
+        """Move profiles out of the old working-directory location.
+
+        Same rules as PresetManager._migrate_legacy: never overwrite an
+        existing new file, never delete the old one before the copy lands.
+        """
+        if os.path.exists(self.presets_file):
+            return
+        legacy = legacy_presets_dir()
+        if legacy is None:
+            return
+        old_file = os.path.join(str(legacy), LEGACY_USER_PRESETS_FILENAME)
+        if not os.path.isfile(old_file):
+            return
+        try:
+            shutil.copyfile(old_file, self.presets_file)
+            os.replace(old_file, old_file + ".migrated")
+        except OSError:
+            pass
 
     def _load_raw(self) -> Dict[str, Any]:
         if not os.path.exists(self.presets_file):
@@ -167,7 +200,7 @@ class ProfileManager:
         of the same name.
         """
         # Resolve relative to THIS FILE, one level up: the data is shipped
-        # inside the package (src/utils/presets/), so the path is identical
+        # inside the package (src/pulsar/utils/presets/), so the path is identical
         # in a source checkout and in site-packages after a wheel install.
         #
         # The previous code walked two levels up to the project root, which

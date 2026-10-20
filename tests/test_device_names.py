@@ -1,4 +1,4 @@
-"""Unit tests for pure device-name parsing in src/utils/device_names.py,
+"""Unit tests for pure device-name parsing in pulsar/utils/device_names.py,
 and for the monitor-filter of MainWindow._categorize_hardware_devices.
 
 The parsing tests call module-level functions directly: no Tkinter, no
@@ -8,8 +8,8 @@ MainWindow, no mocks, no display, no pactl. The monitor tests use a bare
 
 import unittest
 
-from ui.main_window import MainWindow
-from utils.device_names import classify_device_name, detect_device_type
+from pulsar.ui.main_window import MainWindow
+from pulsar.utils.device_names import classify_device_name, detect_device_type
 
 #: A PipeWire monitor of the built-in analog card. Must NOT be named
 #: `alsa_output.test.monitor`: line 4631 drops any name containing 'test'

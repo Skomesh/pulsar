@@ -22,7 +22,7 @@ called, so the routing it performed no longer happens implicitly either.
 import unittest
 from unittest import mock
 
-from ui.main_window import MainWindow
+from pulsar.ui.main_window import MainWindow
 
 
 class FakeStringVar:
@@ -111,8 +111,8 @@ class TestAppAudioTabRefreshesOnEntry(unittest.TestCase):
         # _populate_capture_route_options, and a test must not depend on
         # whether the host has a working PulseAudio.
         with mock.patch(
-            "ui.main_window.PactlRunner.list_hardware_outputs", return_value=[]
-        ), mock.patch("ui.main_window.PactlRunner.list_sinks", return_value=[]):
+            "pulsar.ui.main_window.PactlRunner.list_hardware_outputs", return_value=[]
+        ), mock.patch("pulsar.ui.main_window.PactlRunner.list_sinks", return_value=[]):
             self.win.on_tab_changed(None)
         self.win._refresh_capture_tree.assert_called_once_with()
 
@@ -129,10 +129,10 @@ class TestAppAudioTabRefreshesOnEntry(unittest.TestCase):
     def test_refresh_uses_currently_listed_sinks(self):
         """The refresh must actually ask the server, not reuse a cache."""
         with mock.patch(
-            "ui.main_window.PactlRunner.list_hardware_outputs",
+            "pulsar.ui.main_window.PactlRunner.list_hardware_outputs",
             return_value=["alsa_output.new_headset"],
         ), mock.patch(
-            "ui.main_window.PactlRunner.list_sinks",
+            "pulsar.ui.main_window.PactlRunner.list_sinks",
             return_value=[{"name": "game_sink"}, {"name": "alsa_output.new_headset"}],
         ):
             self.win._populate_capture_route_options()
@@ -156,9 +156,9 @@ class TestRouteSelectionSurvivesRefresh(unittest.TestCase):
 
     def _rebuild(self, outputs):
         with mock.patch(
-            "ui.main_window.PactlRunner.list_hardware_outputs",
+            "pulsar.ui.main_window.PactlRunner.list_hardware_outputs",
             return_value=outputs,
-        ), mock.patch("ui.main_window.PactlRunner.list_sinks", return_value=[]):
+        ), mock.patch("pulsar.ui.main_window.PactlRunner.list_sinks", return_value=[]):
             self.win._populate_capture_route_options()
 
     def test_existing_selection_is_kept(self):
@@ -201,11 +201,11 @@ class TestCreateDevicePopupRemoved(unittest.TestCase):
         win.root = mock.Mock()
 
         with mock.patch(
-            "ui.main_window.PactlRunner.create_sink_only", return_value=True
+            "pulsar.ui.main_window.PactlRunner.create_sink_only", return_value=True
         ) as create_sink, mock.patch(
-            "ui.main_window.PactlRunner.create_loopback"
+            "pulsar.ui.main_window.PactlRunner.create_loopback"
         ) as create_lb, mock.patch(
-            "ui.main_window.messagebox"
+            "pulsar.ui.main_window.messagebox"
         ) as msgbox:
             win.create_device()
 
@@ -229,11 +229,11 @@ class TestCreateDevicePopupRemoved(unittest.TestCase):
         win.root = mock.Mock()
 
         with mock.patch(
-            "ui.main_window.PactlRunner.create_source_only", return_value=True
+            "pulsar.ui.main_window.PactlRunner.create_source_only", return_value=True
         ), mock.patch(
-            "ui.main_window.PactlRunner.create_loopback"
+            "pulsar.ui.main_window.PactlRunner.create_loopback"
         ) as create_lb, mock.patch(
-            "ui.main_window.messagebox"
+            "pulsar.ui.main_window.messagebox"
         ) as msgbox:
             win.create_device()
 

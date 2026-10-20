@@ -9,7 +9,7 @@ that get_graph_snapshot() works against a real PipeWire daemon.
 import unittest
 from unittest import mock
 
-from utils.pw_diagnostics import (
+from pulsar.utils.pw_diagnostics import (
     PwDumpError,
     _extract_rate,
     get_graph_snapshot,
@@ -106,7 +106,7 @@ MOCK_PW_DUMP = [
 
 
 class TestGraphSnapshotMocked(unittest.TestCase):
-    @mock.patch("utils.pw_diagnostics._run_pw_dump")
+    @mock.patch("pulsar.utils.pw_diagnostics._run_pw_dump")
     def test_parses_all_object_types(self, mock_run):
         mock_run.return_value = MOCK_PW_DUMP
         snap = get_graph_snapshot()
@@ -142,7 +142,7 @@ class TestGraphSnapshotMocked(unittest.TestCase):
         self.assertEqual(link["input_node"], 3)
         self.assertEqual(link["state"], "active")
 
-    @mock.patch("utils.pw_diagnostics._run_pw_dump")
+    @mock.patch("pulsar.utils.pw_diagnostics._run_pw_dump")
     def test_handles_non_list_response(self, mock_run):
         mock_run.return_value = {"unexpected": "shape"}
         with self.assertRaises(PwDumpError):

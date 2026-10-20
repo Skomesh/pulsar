@@ -5,22 +5,18 @@ Main application window for the pactl-gui application.
 import json
 import os
 import re
-
-# Importing our utility modules
-import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from typing import Any, Dict, List, Optional
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.device_names import classify_device_name, detect_device_type
-from utils.pactl_runner import PactlRunner
-from utils.preset_manager import PresetManager
-from utils.profile_manager import ProfileManager
-from utils.pw_app_capture import (
+from pulsar.utils.device_names import classify_device_name, detect_device_type
+from pulsar.utils.pactl_runner import PactlRunner
+from pulsar.utils.preset_manager import PresetManager
+from pulsar.utils.profile_manager import ProfileManager
+from pulsar.utils.pw_app_capture import (
     discover_app_audio_nodes,
 )
-from utils.pw_diagnostics import (
+from pulsar.utils.pw_diagnostics import (
     get_graph_snapshot,
     health_summary,
     pw_dump_available,
@@ -982,8 +978,8 @@ class MainWindow:
 
         A profile captures a complete audio routing topology: which virtual
         devices exist, what their settings are, and which loopbacks connect
-        them to real outputs. See src/utils/profile_manager.py for the
-        schema and src/main.py's docs/ for the design rationale.
+        them to real outputs. See pulsar/utils/profile_manager.py for the
+        schema and `pulsar/__main__.py`'s docs/ for the design rationale.
         """
         outer = ttk.Frame(self.profiles_tab, padding="10")
         outer.pack(fill=tk.BOTH, expand=True)

@@ -146,3 +146,101 @@ def read_json_dict(path) -> Dict[str, Any]:
     if not isinstance(data, dict):
         return {}
     return data
+
+
+def looks_like_profile_entry(_name, entry) -> bool:
+    """Does a flat legacy entry look like a profile rather than a preset?
+
+    A flat legacy file -- no wrapper key, every top-level name an entry --
+    has been seen holding both kinds at once, so each manager has to pick
+    its own out rather than claiming the lot.
+
+    `description` is deliberately NOT in this list. Every builtin preset
+    carries one, so including it would classify presets as profiles and
+    both managers would claim the same entry.
+    """
+    if not isinstance(entry, dict):
+        return False
+    return any(k in entry for k in ("devices", "routing", "schema_version"))
+
+
+def looks_like_preset_entry(name, entry) -> bool:
+    """The mirror of the above.
+
+    Anything not profile-shaped is ours, which is the safe direction: a
+    preset claimed by nobody is merely left behind, while a profile
+    mistaken for a preset would be written to the wrong file and fail to
+    load.
+    """
+    return not looks_like_profile_entry(name, entry)
+
+
+def take_legacy_section(old_file, dest_file, my_key, other_keys=(),
+                        whole_file_is_mine=False, entry_filter=None) -> bool:
+    """Move ONE section out of the legacy combined presets file.
+
+    The pre-split `user_presets.json` held presets and profiles together
+    under two top-level keys. Both managers used to copy the whole file
+    into their own new file and then rename the source away -- so whichever
+    constructed first consumed everything and the other found nothing,
+    silently losing half the user's data. See issue #14, reproduced in both
+    orders.
+
+    This takes only ``my_key``'s contents, so each manager ends up with its
+    own data and nothing else -- in particular the legacy file's wrapper
+    keys do not become entries called "presets" and "profiles".
+
+    TWO legacy shapes exist, and both are in the wild:
+
+      * sectioned -- ``{"presets": {...}, "profiles": {...}}``, written
+        once presets and profiles had diverged in shape.
+      * flat -- ``{"MyGame": {"channels": "2"}}`` or ``{"OldProfile":
+        {"devices": []}}``, the original format, where every top-level key
+        is an entry and there is no wrapper. ``whole_file_is_mine`` takes
+        that shape; ``entry_filter`` picks out the entries that belong to
+        this manager, because a flat file has been seen holding both
+        presets and profiles and each must claim only its own.
+
+    The source is retired only once no other manager has anything left to
+    take from it, so the second manager still finds its section. Until then
+    it is left byte-for-byte alone.
+
+    Returns True if a section was migrated.
+    """
+    try:
+        with open(old_file) as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+
+    section = data.get(my_key)
+    if isinstance(section, dict) and section:
+        # Sectioned legacy: the other managers' sections are still here.
+        unclaimed = [k for k in other_keys
+                     if isinstance(data.get(k), dict) and data.get(k)]
+    elif whole_file_is_mine and data:
+        # Flat legacy: every top-level key is an entry, and a flat file has
+        # been seen holding both kinds. Filter to what is ours.
+        section = {k: v for k, v in data.items()
+                   if entry_filter is None or entry_filter(k, v)}
+        unclaimed = [k for k in data if k not in section]
+    else:
+        return False
+
+    if not section:
+        return False
+    if not write_json_atomic(dest_file, section):
+        return False
+
+    # Retire the source only when this manager demonstrably took all of it.
+    # If anything is left another manager could still want, the file stays
+    # byte-for-byte -- a leftover legacy file is a harmless backup, whereas
+    # deleting one the other manager still needs is issue #14.
+    if not unclaimed:
+        try:
+            os.replace(old_file, old_file + ".migrated")
+        except OSError:
+            pass
+    return True

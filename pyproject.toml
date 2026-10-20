@@ -29,7 +29,12 @@ dev = [
 ]
 
 [project.scripts]
-pulsar = "pulsar.__main__:main"
+# `pulsar` is the command-line interface; the GUI is `pulsar-gui`. The
+# desktop entry, every packaging recipe and install.sh all point at
+# pulsar-gui, so a rename here without those updates installs cleanly and
+# launches nothing.
+pulsar = "pulsar.cli:cli_main"
+pulsar-gui = "pulsar.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/Skomesh/pulsar"

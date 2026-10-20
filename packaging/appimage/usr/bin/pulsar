@@ -1,13 +1,20 @@
 #!/bin/sh
 # usr/bin/pulsar -- the Pulsar launcher inside the AppImage's AppDir.
 #
+# Installed under BOTH names from this one file:
+#   pulsar      -> the command-line interface (pulsar.cli)
+#   pulsar-gui  -> the graphical app      (pulsar.__main__)
+# It dispatches on its own basename rather than existing twice, because the
+# ~40 lines of environment setup below have to be identical for both and two
+# copies of them would drift.
+#
 # AppRun (packaging/appimage/AppRun) is the entry point the AppImage runtime
 # invokes; this file is the equivalent entry for the case where something
-# execs `pulsar` directly -- the packaged pulsar.desktop does exactly that
-# (Exec=pulsar), relying on the AppImage runtime having put the AppDir's
+# execs `pulsar` or `pulsar-gui` directly -- the packaged pulsar.desktop
+# execs pulsar-gui, relying on the AppImage runtime having put the AppDir's
 # usr/bin on PATH. Both routes land on the same bundled interpreter with the
 # same environment; this one resolves the AppDir from its own location
-# (usr/bin/pulsar -> ../../ = AppDir) rather than from argv[0] being AppRun.
+# (usr/bin/<name> -> ../../ = AppDir) rather than from argv[0] being AppRun.
 #
 # Kept as a shell script rather than the wheel's generated console script
 # because a generated console script starts with
@@ -65,4 +72,16 @@ export PYTHONHOME PYTHONPATH PYTHONNOUSERSITE PYTHONSAFEPATH PYTHONDONTWRITEBYTE
 PATH="$APPDIR/usr/bin:/usr/local/bin:/usr/bin:/bin${PATH:+:$PATH}"
 export PATH
 
-exec "$PYTHON" -m pulsar "$@"
+# Dispatch on the name this file was invoked as. `pulsar` is the CLI,
+# `pulsar-gui` (and anything else, e.g. AppRun exec'ing it directly) is the
+# windowed app. Falling through to the GUI keeps the old behaviour for a
+# name we do not recognise rather than starting a CLI that prints help and
+# exits.
+case "$(basename "$self")" in
+    pulsar)
+        exec "$PYTHON" -m pulsar.cli "$@"
+        ;;
+    *)
+        exec "$PYTHON" -m pulsar "$@"
+        ;;
+esac

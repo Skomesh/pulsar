@@ -800,7 +800,7 @@ class MainWindow:
         self.unload_button.pack(side=tk.LEFT, padx=5)
 
         self.remove_null_sinks_button = ttk.Button(
-            button_frame, text="Remove All Virtual Devices", command=self.unload_all_null_sinks
+            button_frame, text="Remove Pulsar Devices", command=self.unload_all_null_sinks
         )
         self.remove_null_sinks_button.pack(side=tk.LEFT, padx=5)
 
@@ -3951,16 +3951,16 @@ class MainWindow:
             messagebox.showerror("Error", f"Failed to unload module #{module_id}")
 
     def unload_all_null_sinks(self):
-        """Unload all null sink modules."""
+        """Remove the virtual devices this program created."""
         # Confirm with the user
         if not messagebox.askyesno(
             "Confirm",
-            "Are you sure you want to remove ALL null sinks?\n\n"
-            "This will unload all module-null-sink modules, which may disrupt audio routing."
+            "Remove the virtual devices Pulsar created?\n\n"
+            "Devices made by other programs are left alone."
         ):
             return
 
-        self.status_var.set("Removing all null sinks...")
+        self.status_var.set("Removing Pulsar devices...")
         self.root.update()
 
         # Unload all null sinks
@@ -3968,7 +3968,7 @@ class MainWindow:
 
         # Update UI with results
         if count > 0:
-            self.add_output(f"Successfully removed {count} null sink module(s)")
+            self.add_output(f"Removed {count} Pulsar device(s)")
 
         if errors:
             error_msg = "\n".join(errors)
@@ -3977,11 +3977,11 @@ class MainWindow:
 
         # Update the status bar
         if count > 0 and not errors:
-            self.status_var.set(f"Successfully removed {count} null sink module(s)")
+            self.status_var.set(f"Removed {count} Pulsar device(s)")
         elif count > 0 and errors:
-            self.status_var.set(f"Removed {count} null sink(s) with some errors")
+            self.status_var.set(f"Removed {count} device(s) with some errors")
         else:
-            self.status_var.set("No null sinks were removed")
+            self.status_var.set("No Pulsar devices were present")
 
         # Refresh all views with the unified approach
         self.refresh_all_views()

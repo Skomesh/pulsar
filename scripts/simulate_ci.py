@@ -56,6 +56,8 @@ def check_wheel(wheel):
 
     if not any(n == "pulsar/__main__.py" for n in names):
         fail("wheel", "pulsar/__main__.py missing")
+    if not any(n == "pulsar/cli.py" for n in names):
+        fail("wheel", "pulsar/cli.py missing")
 
     tl = [n for n in names if n.endswith("top_level.txt")]
     if not tl:
@@ -91,8 +93,10 @@ def check_install(wheel):
     step("3. console entry point importable (outside the source tree)")
     r = subprocess.run(
         [f"{venv}/bin/python", "-c",
-         "from pulsar.__main__ import main\n"
-         "assert callable(main), 'pulsar.__main__.main is missing'\n"
+         "from pulsar.__main__ import main as gui_main\n"
+         "from pulsar.cli import cli_main\n"
+         "assert callable(gui_main), 'GUI entry point missing'\n"
+         "assert callable(cli_main), 'CLI entry point missing'\n"
          "print('console entry point importable: OK')"],
         cwd="/tmp", capture_output=True, text=True,
     )

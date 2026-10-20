@@ -13,7 +13,7 @@
 # for a PEP 517 package. They install the wheel into %{buildroot}, then
 # %%py3_shebang_fix rewrites the console script's shebang from the build
 # interpreter to /usr/bin/python3 -- which is exactly what is needed here,
-# because Pulsar's /usr/bin/pulsar comes from the [project.scripts] entry
+# because Pulsar's /usr/bin/pulsar-gui comes from the [project.scripts] entry
 # point and would otherwise be unusable after install. It also cleans the
 # stray __pycache__ pip leaves in bindir.
 #
@@ -162,9 +162,9 @@ fi
 # checkout. An RPM must ship a launcher that already works, so the placeholder
 # is replaced here with the path the console script is installed to. %%py3_shebang_fix
 # (inside %%pyproject_install) has by this point rewritten the script's shebang,
-# so /usr/bin/pulsar is a working interpreter invocation.
+# so /usr/bin/pulsar-gui is a working interpreter invocation.
 install -D -m 0644 pulsar.desktop %{buildroot}%{_datadir}/applications/pulsar.desktop
-sed -i -e 's|PLACEHOLDER_EXEC_PATH|/usr/bin/pulsar|g' \
+sed -i -e 's|PLACEHOLDER_EXEC_PATH|/usr/bin/pulsar-gui|g' \
     %{buildroot}%{_datadir}/applications/pulsar.desktop
 
 # Icons into the hicolor theme layout, each named pulsar.png / pulsar.svg as
@@ -196,7 +196,10 @@ PYTHONPATH=%{buildroot}%{python3_sitelib} \
 %files -f %{pyproject_files}
 %license LICENSE NOTICE
 %doc README.md CHANGELOG.md
+# Both console scripts. `pulsar` is the command-line interface and
+# `pulsar-gui` the windowed app; the desktop entry execs the latter.
 %{_bindir}/pulsar
+%{_bindir}/pulsar-gui
 %{_datadir}/applications/pulsar.desktop
 %{_datadir}/icons/hicolor/16x16/apps/pulsar.png
 %{_datadir}/icons/hicolor/24x24/apps/pulsar.png
@@ -212,7 +215,7 @@ PYTHONPATH=%{buildroot}%{python3_sitelib} \
 * Fri Oct 16 2026 Skomesh <skomesh@users.noreply.github.com> - 0.1.0-1
 - Initial RPM packaging of Pulsar 0.1.0.
 - Built with %%pyproject_wheel/%%pyproject_install; installs the pulsar module
-  into %%{python3_sitelib} and the /usr/bin/pulsar launcher into bindir.
-- Desktop entry ships with Exec already set to /usr/bin/pulsar rather than the
+  into %%{python3_sitelib} and the /usr/bin/pulsar-gui launcher into bindir.
+- Desktop entry ships with Exec already set to /usr/bin/pulsar-gui rather than the
   PLACEHOLDER_EXEC_PATH the source template carries.
 - Requires python3-tkinter, pulseaudio-utils and pipewire-utils.

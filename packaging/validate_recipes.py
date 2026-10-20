@@ -100,7 +100,13 @@ def schema_checks(data):
 def snap_semantic_checks(data):
     print("\n== snap: semantic cross-checks")
     apps = data.get("apps", {})
-    check(list(apps) == ["pulsar"], "exactly one app named after the snap")
+    # The GUI app is pulsar-gui because `pulsar` is the command-line
+    # interface. A single app named `pulsar` pointing at bin/pulsar would
+    # hand a terminal command to desktop-launch and open no window.
+    check("pulsar-gui" in apps, "a pulsar-gui app is declared")
+    if "pulsar-gui" in apps:
+        check(apps["pulsar-gui"].get("command") == "bin/pulsar-gui",
+              "pulsar-gui runs bin/pulsar-gui, not the CLI")
     check(data.get("confinement") == "strict", "strict confinement")
 
     plugs = data.get("plugs", {})
@@ -108,7 +114,7 @@ def snap_semantic_checks(data):
         check(plugs.get(name, {}).get("interface") == name,
               f"plug {name} declares interface: {name}")
 
-    app_plugs = apps["pulsar"].get("plugs", [])
+    app_plugs = apps.get("pulsar-gui", {}).get("plugs", [])
     for name in ("audio-playback", "audio-record"):
         check(name in app_plugs, f"app plugs includes {name}")
 
@@ -134,7 +140,7 @@ def snap_semantic_checks(data):
     check((REPO / "assets/icons/pulsar.svg").is_file(), "icon referenced exists: assets/icons/pulsar.svg")
 
     # desktop entry authored in the recipe
-    check("Exec=pulsar" in body, "desktop entry uses Exec=pulsar")
+    check("Exec=pulsar-gui" in body, "desktop entry execs pulsar-gui")
     check("Icon=pulsar" in body, "desktop entry uses Icon=pulsar")
     # The generated desktop entry (inside the heredoc) must not contain the
     # placeholder. Check the heredoc body only, so an explanatory comment

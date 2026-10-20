@@ -193,12 +193,22 @@ modules:
       # PYTHONPATH rather than relying on CWD, so the app can never be
       # started from an arbitrary directory (see issue #9 reasoning above).
       - |
-        cat > /app/bin/pulsar <<'LAUNCHER'
+        # Two launchers from one module. `pulsar-gui` is the windowed app and
+      # is what the .desktop below execs; `pulsar` is the CLI. Pointing
+      # the desktop entry at the CLI installs cleanly and opens nothing.
+      - |
+        cat > /app/bin/pulsar-gui <<'LAUNCHER'
         #!/bin/sh
         export PYTHONPATH="/app${PYTHONPATH:+:$PYTHONPATH}"
         exec python3 -m pulsar "$@"
         LAUNCHER
-      - chmod +x /app/bin/pulsar
+      - |
+        cat > /app/bin/pulsar <<'LAUNCHER'
+        #!/bin/sh
+        export PYTHONPATH="/app${PYTHONPATH:+:$PYTHONPATH}"
+        exec python3 -m pulsar.cli "$@"
+        LAUNCHER
+      - chmod +x /app/bin/pulsar /app/bin/pulsar-gui
 
       # ---- desktop entry -------------------------------------------------
       # Authored here rather than reusing the repo's pulsar.desktop, which is
@@ -214,7 +224,7 @@ modules:
         Name=Pulsar
         GenericName=Audio Routing
         Comment=Graphical audio routing manager for PulseAudio and PipeWire
-        Exec=pulsar
+        Exec=pulsar-gui
         Icon=io.github.skomesh.pulsar
         Terminal=false
         Categories=AudioVideo;Audio;Settings;Mixer;

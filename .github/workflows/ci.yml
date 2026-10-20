@@ -142,14 +142,18 @@ jobs:
           else:
               print(z.read(entry[0]).decode().strip())
 
-          # The console script points at pulsar.__main__:main, so that module
+          # The GUI console script is pulsar-gui -> pulsar.__main__:main, and
+          # `pulsar` is now pulsar.cli. Both modules have to be in the
+          # wheel or one of the two entry points cannot resolve:
           # has to be in the wheel or `pulsar` cannot resolve. This used to
           # assert on top-level `main.py`, which was correct before the app
           # moved into a `pulsar` package.
-          if not any(n == "pulsar/__main__.py" for n in names):
-              errors.append(
-                  "pulsar/__main__.py is not in the wheel, so `pulsar` cannot resolve"
-              )
+          for needed, entry in (("pulsar/__main__.py", "pulsar-gui"),
+                                 ("pulsar/cli.py", "pulsar")):
+              if not any(n == needed for n in names):
+                  errors.append(
+                      f"{needed} is not in the wheel, so `{entry}` cannot resolve"
+                  )
 
           # top_level.txt must name only `pulsar`. If generic names like
           # `utils` or `config` reappear at the top level, a distro package
@@ -192,9 +196,11 @@ jobs:
           # Import from outside the repo so the source tree cannot satisfy it.
           cd /tmp
           /tmp/smoke/bin/python -c "
-          from pulsar.__main__ import main
-          assert callable(main), 'pulsar.__main__.main is missing'
-          print('console entry point importable: OK')
+          from pulsar.__main__ import main as gui_main
+          from pulsar.cli import cli_main
+          assert callable(gui_main), 'pulsar.__main__.main is missing'
+          assert callable(cli_main), 'pulsar.cli.cli_main is missing'
+          print('both console entry points importable: OK')
           "
 
       - name: Verify installed package loads its preset data

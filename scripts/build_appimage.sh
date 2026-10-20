@@ -527,7 +527,20 @@ stage_launchers() {
     # build without editing the script.
     install -m 0755 "$PKG_DIR/AppRun"          "$appdir/AppRun"
     install -m 0755 "$PKG_DIR/usr/bin/pulsar"  "$appdir/usr/bin/pulsar"
+    # Same file, second name. The script dispatches on its own basename, so
+    # `pulsar` runs the CLI and `pulsar-gui` the windowed app. The packaged
+    # desktop entry execs pulsar-gui; without this second name it would
+    # resolve to the CLI and open a window that never appears.
+    install -m 0755 "$PKG_DIR/usr/bin/pulsar"  "$appdir/usr/bin/pulsar-gui"
     install -m 0644 "$PKG_DIR/pulsar.desktop"  "$appdir/pulsar.desktop"
+
+    # A desktop entry naming a binary that is not in the AppDir installs
+    # cleanly and launches nothing, which is the exact failure this check
+    # exists to catch.
+    for launcher in pulsar pulsar-gui; do
+        [ -x "$appdir/usr/bin/$launcher" ] \
+            || die "AppDir is missing usr/bin/$launcher"
+    done
 
     # desktop-file-validate if the host has it; never fatal, since its
     # absence is not a reason to fail the build.
@@ -575,6 +588,7 @@ finalize_appdir() {
     find "$appdir" -type d -exec chmod 0755 {} +
     find "$appdir" -type f -exec chmod 0644 {} +
     chmod 0755 "$appdir/AppRun" "$appdir/usr/bin/pulsar" \
+               "$appdir/usr/bin/pulsar-gui" \
                "$appdir/usr/bin/python3" "$appdir/usr/bin/python3."* 2>/dev/null || true
     # Never bake a build-machine path into the bundle.
     find "$appdir" -name '*.pyc' -delete 2>/dev/null || true

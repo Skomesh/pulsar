@@ -134,6 +134,15 @@ class TestCreateNullSink(unittest.TestCase):
         self.assertEqual(len(props["audio.position"].split(",")), 2)
         # sink_properties=device.description=X is stored as node.description
         self.assertEqual(props["node.description"], "MyCustomSink")
+        # The ownership marker is merged in alongside the caller's own
+        # property rather than replacing it. Both matter: the first is what
+        # the caller asked for, the second is what lets this program find
+        # and remove the device later.
+        #
+        # pw-dump hands back `true` as a Python bool, so accept either form
+        # rather than pinning the test to one parser's type choice.
+        marker = props.get("pulsar.managed")
+        self.assertIn(marker, (True, "true"), f"marker missing: {marker!r}")
 
 
 @unittest.skipUnless(pactl_available(), "pactl not available")

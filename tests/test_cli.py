@@ -387,6 +387,115 @@ class TestRouteSelection(CliTestBase):
         self.assertIn("nosuchsink", err)
 
 
+class TestListSources(CliTestBase):
+    # Real shape from a live `pactl list sources`: same keys as sinks plus
+    # monitor_of_sink, which is what distinguishes a monitor from a real
+    # capture device.
+    SOURCES = [
+        {
+            "id": "18335", "name": "auto_null.monitor",
+            "description": "Monitor of Dummy Output", "state": "SUSPENDED",
+            "mute": "no", "base_volume": "65536 / 100% / 0.00 dB",
+            "monitor_of_sink": "auto_null", "driver": "PipeWire",
+        },
+        {
+            "id": "18336", "name": "alsa_input.pci",
+            "description": "Built-in Audio Analog Stereo", "state": "RUNNING",
+            "mute": "yes", "base_volume": "65536 / 60% / -13.31 dB",
+            "monitor_of_sink": "", "driver": "PipeWire",
+        },
+    ]
+
+    def test_lists_sources_as_json(self):
+        with self.patch_runner(list_sources=mock.Mock(return_value=self.SOURCES)):
+            payload = self.run_cli_json("list", "sources")
+
+        self.assertEqual(payload["count"], 2)
+        self.assertEqual(payload["sources"][1]["name"], "alsa_input.pci")
+
+    def test_shows_which_sources_are_monitors(self):
+        """A monitor of X and a capture device are routed differently."""
+        with self.patch_runner(list_sources=mock.Mock(return_value=self.SOURCES)):
+            code, out, _ = self.run_cli("list", "sources")
+
+        self.assertEqual(code, 0)
+        self.assertIn("auto_null", out)
+        self.assertIn("alsa_input.pci", out)
+
+    def test_no_sources_is_not_an_error(self):
+        with self.patch_runner(list_sources=mock.Mock(return_value=[])):
+            code, out, _ = self.run_cli("list", "sources")
+        self.assertEqual(code, 0)
+        self.assertIn("No sources", out)
+
+
+class TestListCards(CliTestBase):
+    # Real key set from _parse_card_profile_line.
+    CARDS = [
+        {
+            "name": "alsa_card.pci", "description": "Built-in Audio",
+            "sinks": 1, "sources": 1, "priority": 3,
+            "available": [
+                {"name": "output:analog-stereo", "description": "Analog Stereo Output"},
+            ],
+        },
+    ]
+
+    def test_lists_cards_as_json(self):
+        with self.patch_runner(list_cards=mock.Mock(return_value=self.CARDS)):
+            payload = self.run_cli_json("list", "cards")
+
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["cards"][0]["name"], "alsa_card.pci")
+
+    def test_table_shows_available_profile_count(self):
+        with self.patch_runner(list_cards=mock.Mock(return_value=self.CARDS)):
+            code, out, _ = self.run_cli("list", "cards")
+
+        self.assertEqual(code, 0)
+        self.assertIn("alsa_card.pci", out)
+        self.assertIn("1", out)
+
+    def test_no_cards_is_not_an_error(self):
+        with self.patch_runner(list_cards=mock.Mock(return_value=[])):
+            code, out, _ = self.run_cli("list", "cards")
+        self.assertEqual(code, 0)
+        self.assertIn("No cards", out)
+
+
+class TestListSinkInputs(CliTestBase):
+    # Real key set from PactlRunner.list_sink_inputs's docstring. `index`
+    # and `node_name` are the two that matter: the index is what
+    # move-sink-input wants, the node name is what identifies the app.
+    STREAMS = [
+        {
+            "index": "5", "application": "firefox", "node_name": "Firefox",
+            "media": "Music", "sink_index": "0", "sink": "alsa_output.pci",
+        },
+    ]
+
+    def test_lists_streams_as_json(self):
+        with self.patch_runner(list_sink_inputs=mock.Mock(return_value=self.STREAMS)):
+            payload = self.run_cli_json("list", "streams")
+
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["streams"][0]["application"], "firefox")
+
+    def test_table_names_the_application(self):
+        with self.patch_runner(list_sink_inputs=mock.Mock(return_value=self.STREAMS)):
+            code, out, _ = self.run_cli("list", "streams")
+
+        self.assertEqual(code, 0)
+        self.assertIn("firefox", out)
+        self.assertIn("alsa_output.pci", out)
+
+    def test_no_streams_is_not_an_error(self):
+        with self.patch_runner(list_sink_inputs=mock.Mock(return_value=[])):
+            code, out, _ = self.run_cli("list", "streams")
+        self.assertEqual(code, 0)
+        self.assertIn("No streams", out)
+
+
 class TestExitCodes(CliTestBase):
     def test_unknown_command_exits_nonzero(self):
         code, _, err = self.run_cli("list", "bananas")

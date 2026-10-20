@@ -212,6 +212,61 @@ def cmd_list_sinks(args) -> int:
     return EXIT_OK
 
 
+def cmd_list_sources(args) -> int:
+    sources = PactlRunner.list_sources()
+    # `monitor_of_sink` is what separates a capture device from the monitor
+    # of an output. They route differently and confusing the two is a
+    # common mistake, so the column is worth showing rather than hiding.
+    rows = [
+        [s.get("id", "?"), s.get("name", "?"), s.get("description", ""),
+         s.get("state", "?"), volume_percent(s.get("base_volume")),
+         s.get("mute", "-"), s.get("monitor_of_sink", "") or "-"]
+        for s in sources
+    ]
+    text = table(rows, ["IDX", "NAME", "DESCRIPTION", "STATE", "VOL%", "MUTE",
+                        "MONITOR OF"])
+    emit(
+        {"count": len(sources), "sources": sources},
+        text if sources else "No sources found.",
+        args.json,
+    )
+    return EXIT_OK
+
+
+def cmd_list_cards(args) -> int:
+    cards = PactlRunner.list_cards()
+    rows = [
+        [c.get("name", "?"), c.get("description", ""),
+         str(c.get("sinks", 0)), str(c.get("sources", 0)),
+         str(len(c.get("available") or []))]
+        for c in cards
+    ]
+    text = table(rows, ["NAME", "DESCRIPTION", "SINKS", "SOURCES", "PROFILES"])
+    emit(
+        {"count": len(cards), "cards": cards},
+        text if cards else "No cards found.",
+        args.json,
+    )
+    return EXIT_OK
+
+
+def cmd_list_streams(args) -> int:
+    streams = PactlRunner.list_sink_inputs()
+    rows = [
+        [s.get("index", "?"), s.get("application", "") or "-",
+         s.get("node_name", "") or "-", s.get("media", "") or "-",
+         s.get("sink", "") or "-"]
+        for s in streams
+    ]
+    text = table(rows, ["INDEX", "APPLICATION", "NODE", "MEDIA", "SINK"])
+    emit(
+        {"count": len(streams), "streams": streams},
+        text if streams else "No streams found.",
+        args.json,
+    )
+    return EXIT_OK
+
+
 def cmd_list_routes(args) -> int:
     routes = PactlRunner.list_loopbacks()
     rows = [[r.get("id", "?"), r.get("source", "?"), r.get("sink", "?")]
@@ -330,6 +385,18 @@ GROUPS: Dict[str, Dict[str, Any]] = {
         "routes": {
             "handler": cmd_list_routes,
             "help": "List loopback routes between sinks",
+        },
+        "sources": {
+            "handler": cmd_list_sources,
+            "help": "List audio sources",
+        },
+        "cards": {
+            "handler": cmd_list_cards,
+            "help": "List sound cards and their available profiles",
+        },
+        "streams": {
+            "handler": cmd_list_streams,
+            "help": "List playing application streams",
         },
     },
 }

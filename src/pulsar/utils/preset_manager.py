@@ -5,13 +5,14 @@ Handles saving, loading, and managing custom audio presets.
 
 import json
 import os
-import shutil
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from pulsar.utils.paths import (
     legacy_presets_dir,
+    looks_like_preset_entry,
     read_json_dict,
+    take_legacy_section,
     user_presets_dir,
     write_json_atomic,
 )
@@ -96,14 +97,18 @@ class PresetManager:
         old_file = os.path.join(str(legacy), "user_presets.json")
         if not os.path.isfile(old_file):
             return
-        try:
-            shutil.copyfile(old_file, self.presets_file)
-            old_backup = old_file + ".migrated"
-            os.replace(old_file, old_backup)
-        except OSError:
-            # A failed migration must not stop the app from starting; the
-            # user can still save new presets to the XDG location.
-            pass
+        # Take ONLY the presets section. This used to copy the entire
+        # legacy file -- profiles and all -- into the presets file and then
+        # rename the source away, which left ProfileManager with nothing to
+        # migrate and silently cost the user every profile they had saved.
+        # See issue #14.
+        #
+        # A failure here must not stop the app starting; the user can still
+        # save new presets to the XDG location.
+        take_legacy_section(old_file, self.presets_file,
+                            my_key="presets", other_keys=("profiles",),
+                            whole_file_is_mine=True,
+                            entry_filter=looks_like_preset_entry)
 
     def _load_user_presets(self) -> Dict[str, Any]:
         """Load user presets from file.

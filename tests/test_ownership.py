@@ -17,9 +17,15 @@ Each test creates its own uniquely-named sinks and removes exactly those
 in tearDown, so running the suite cannot destroy anything else.
 """
 
+import shutil
 import unittest
 
 from pulsar.utils.pactl_runner import PactlRunner
+
+
+def pactl_available():
+    """CI installs no audio stack, so these cannot run there."""
+    return shutil.which("pactl") is not None
 
 #: Unique-ish per run so a crashed previous run cannot collide.
 SUFFIX = "ownertest"
@@ -37,6 +43,7 @@ def module_args_for(name):
     return None
 
 
+@unittest.skipUnless(pactl_available(), "pactl not available")
 class TestOwnershipMarker(unittest.TestCase):
     def setUp(self):
         self.cleanup()
@@ -127,6 +134,7 @@ class TestOwnershipMarker(unittest.TestCase):
         self.assertIsNone(module_args_for(FOREIGN))
 
 
+@unittest.skipUnless(pactl_available(), "pactl not available")
 class TestProfileApplyScoping(unittest.TestCase):
     """Applying a profile used to wipe everyone's null sinks on the way in."""
 

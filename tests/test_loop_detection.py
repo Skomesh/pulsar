@@ -129,15 +129,22 @@ class TestMalformedInput(unittest.TestCase):
             PactlRunner.loopback_cycle(existing, monitor_of("game"), "headphones")
         )
 
-    def test_source_without_monitor_suffix_is_ignored(self):
-        """A loopback whose source is not a monitor is not part of the graph.
+    def test_source_without_monitor_suffix_is_still_a_real_edge(self):
+        """A loopback whose source is a bare sink name IS part of the graph.
 
-        The old post-create popup passed `source=<sink>` rather than
-        `<sink>.monitor` and the server accepted it. Such an entry has no
-        sink to treat as its origin, so it cannot contribute to a cycle.
+        This used to assert the opposite, on the reasoning that such an
+        entry "has no sink to treat as its origin". That reasoning was
+        wrong: `module-loopback source=game sink=voice` loads with rc=0 and
+        no warning, so the entry is real, and treating it as invisible let a
+        live feedback loop through. See issue #15 -- reproduced against a
+        running server, where the reverse route was accepted with no
+        LoopbackCycleError.
+
+        The origin is the source with any trailing `.monitor` removed, so a
+        bare `game` and a `game.monitor` are the same node.
         """
         existing = [{"id": "x", "source": "game", "sink": "voice"}]
-        self.assertIsNone(
+        self.assertIsNotNone(
             PactlRunner.loopback_cycle(existing, monitor_of("voice"), "game")
         )
 

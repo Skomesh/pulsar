@@ -23,7 +23,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 from pulsar import cli
-from pulsar.cli import EXIT_ERROR
+from pulsar.cli import EXIT_ERROR, EXIT_USAGE
 from pulsar.utils.pactl_runner import LoopbackCycleError
 
 
@@ -494,6 +494,117 @@ class TestListSinkInputs(CliTestBase):
             code, out, _ = self.run_cli("list", "streams")
         self.assertEqual(code, 0)
         self.assertIn("No streams", out)
+
+
+class TestCreate(CliTestBase):
+    """Creating a virtual device, and routing it in one go.
+
+    `pulsar create sink game --route-to speakers` is the common case: you
+    want a device wired to an output, and having to run `pulsar route` as
+    a second command is a step people forget.
+    """
+
+    SINKS = TestListSinks.SINKS
+    # 'game' is already in SINKS, so a create test has to use a fresh name.
+    # Creating one that exists must be refused -- that is its own test.
+
+    def create(self, *argv):
+        ok = mock.Mock(return_value=True)
+        mon = mock.Mock(return_value="newdev.monitor")
+        lb = mock.Mock(return_value="42")
+        with self.patch_runner(
+            create_sink_only=ok,
+            monitor_source_for=mon,
+            create_loopback=lb,
+            list_sinks=mock.Mock(return_value=self.SINKS),
+        ):
+            code, out, err = self.run_cli("create", *argv)
+        return code, out, err, ok, lb
+
+    def test_creates_a_sink(self):
+        code, out, _, ok, _ = self.create("sink", "newdev")
+        self.assertEqual(code, 0)
+        ok.assert_called_once()
+        self.assertIn("newdev", out)
+
+    def test_creates_a_source_only(self):
+        ok = mock.Mock(return_value=True)
+        with self.patch_runner(create_source_only=ok):
+            code, _, _ = self.run_cli("create", "source", "mic")
+        self.assertEqual(code, 0)
+        ok.assert_called_once_with("mic", "mic", channels=2)
+
+    def test_duplicate_name_is_refused(self):
+        """A second device with the same name is never what was meant."""
+        code, _, err, ok, _ = self.create("sink", "game")
+        self.assertEqual(code, EXIT_ERROR)
+        self.assertIn("game", err)
+        ok.assert_not_called()
+
+    def test_route_to_creates_the_loopback_in_one_step(self):
+        # 'game' is in SINKS, so the target resolves.
+        code, _, _, _, lb = self.create("sink", "newdev", "--route-to", "game")
+        self.assertEqual(code, 0)
+        lb.assert_called_once()
+
+    def test_route_to_survives_a_feedback_loop_and_still_reports_failure(self):
+        """The device is created, so the command must say what happened.
+
+        Rolling back the sink on a refused route would leave the user with
+        neither the route nor the device they asked for, and an error
+        message implying the device does not exist.
+        """
+        with self.patch_runner(
+            create_sink_only=mock.Mock(return_value=True),
+            monitor_source_for=mock.Mock(return_value="newdev.monitor"),
+            create_loopback=mock.Mock(side_effect=LoopbackCycleError(["a", "b", "a"])),
+            list_sinks=mock.Mock(return_value=[{"name": "newdev", "description": "new"}]),
+        ):
+            code, out, err = self.run_cli(
+                "create", "sink", "newdev", "--route-to", "newdev")
+        self.assertEqual(code, EXIT_ERROR)
+        self.assertIn("newdev", err)
+
+
+class TestVolumeAndDefault(CliTestBase):
+    SINKS = TestListSinks.SINKS
+
+    def test_sets_volume(self):
+        with self.patch_runner(
+            set_sink_volume=mock.Mock(return_value=True),
+            list_sinks=mock.Mock(return_value=self.SINKS),
+        ):
+            code, out, _ = self.run_cli("volume", "game", "50")
+        self.assertEqual(code, 0)
+        self.assertIn("50", out)
+
+    def test_rejects_a_percentage_outside_range(self):
+        with self.patch_runner(
+            set_sink_volume=mock.Mock(return_value=True),
+            list_sinks=mock.Mock(return_value=self.SINKS),
+        ):
+            code, _, err = self.run_cli("volume", "game", "500")
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertIn("500", err)
+
+    def test_sets_default_sink(self):
+        with self.patch_runner(
+            set_default_sink=mock.Mock(return_value=True),
+            list_sinks=mock.Mock(return_value=self.SINKS),
+        ):
+            code, out, _ = self.run_cli("default", "sink", "game")
+        self.assertEqual(code, 0)
+        self.assertIn("game", out)
+
+    def test_mutes_and_unmutes(self):
+        mute = mock.Mock(return_value=True)
+        with self.patch_runner(
+            set_sink_mute=mute,
+            list_sinks=mock.Mock(return_value=self.SINKS),
+        ):
+            code, _, _ = self.run_cli("mute", "game", "on")
+        self.assertEqual(code, 0)
+        mute.assert_called_once_with("game", True)
 
 
 class TestExitCodes(CliTestBase):

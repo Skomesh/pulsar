@@ -280,6 +280,147 @@ def cmd_list_routes(args) -> int:
     return EXIT_OK
 
 
+def parse_percent(raw: str) -> Optional[int]:
+    """'50' -> 50, '50%' -> 50. None if it is not a sane percentage.
+
+    A value outside 0-100 is a usage error rather than something to clamp:
+    `pulsar volume game 500` is a typo, and quietly turning it into 100%
+    hides it.
+    """
+    text = raw.strip().rstrip("%")
+    try:
+        value = int(text)
+    except ValueError:
+        return None
+    if not 0 <= value <= 100:
+        return None
+    return value
+
+
+def cmd_create(args) -> int:
+    """Create a virtual device, optionally routing it in the same breath.
+
+    A refused --route-to leaves the device in place and reports failure.
+    Deleting it again would leave the user with neither the device nor the
+    route they asked for, and an error implying the device never existed.
+    """
+    kind, name = args.kind, args.name
+    description = args.description or name
+
+    existing = PactlRunner.list_sinks() + PactlRunner.list_sources()
+    names = {s.get("name", "") for s in existing}
+    if name in names:
+        print(f"Error: '{name}' already exists. "
+              f"Run `pulsar list sinks` to see current devices.",
+              file=sys.stderr)
+        return EXIT_ERROR
+
+    makers = {
+        "sink": PactlRunner.create_sink_only,
+        "source": PactlRunner.create_source_only,
+        "both": PactlRunner.create_duplex_sink,
+    }
+    created = makers[kind](name, description, channels=args.channels)
+    if not created:
+        print(f"Error: could not create the {kind} '{name}'.", file=sys.stderr)
+        return EXIT_ERROR
+
+    if not args.route_to:
+        emit({"created": True, "kind": kind, "name": name},
+             f"Created {kind} '{name}'.", args.json)
+        return EXIT_OK
+
+    target = resolve_or_report(args.route_to, "route target", args)
+    if not target:
+        print(f"Created {kind} '{name}', but the route was not made.", file=sys.stderr)
+        return EXIT_ERROR
+
+    monitor = PactlRunner.monitor_source_for(name)
+    if not monitor:
+        print(f"Created {kind} '{name}', but it has no monitor to route.",
+              file=sys.stderr)
+        return EXIT_ERROR
+
+    try:
+        module_id = PactlRunner.create_loopback(monitor, target)
+    except LoopbackCycleError as exc:
+        print(f"Created {kind} '{name}', but routing it to '{target}' would "
+              f"create a feedback loop: {exc.render()}", file=sys.stderr)
+        print(f"'{name}' is there; add the route once the other one is gone.",
+              file=sys.stderr)
+        emit({"created": True, "routed": False, "error": "feedback_loop",
+              "chain": exc.chain, "name": name, "target": target},
+             "", args.json)
+        return EXIT_ERROR
+
+    if not module_id:
+        print(f"Created {kind} '{name}', but the route failed.", file=sys.stderr)
+        return EXIT_ERROR
+
+    # One line, creation first. Emitting as it goes put the route
+    # confirmation ahead of the device it refers to, because the route
+    # summary went to stderr and the creation line to stdout.
+    emit({"created": True, "routed": True, "module": module_id,
+          "kind": kind, "name": name, "target": target},
+         f"Created {kind} '{name}' and routed it to {target}.", args.json)
+    return EXIT_OK
+
+
+def cmd_volume(args) -> int:
+    percent = parse_percent(args.percent)
+    if percent is None:
+        print(f"Error: '{args.percent}' is not a percentage between 0 and 100.",
+              file=sys.stderr)
+        return EXIT_USAGE
+
+    sink = resolve_or_report(args.sink, "sink", args)
+    if not sink:
+        return EXIT_ERROR
+
+    if not PactlRunner.set_sink_volume(sink, percent):
+        print(f"Error: could not set {sink} to {percent}%.", file=sys.stderr)
+        return EXIT_ERROR
+
+    emit({"sink": sink, "volume": percent},
+         f"{sink} volume set to {percent}%", args.json)
+    return EXIT_OK
+
+
+def cmd_default(args) -> int:
+    sink = resolve_or_report(args.name, "sink", args)
+    if not sink:
+        return EXIT_ERROR
+
+    setter = (PactlRunner.set_default_sink if args.kind == "sink"
+              else PactlRunner.set_default_source)
+    if not setter(sink):
+        print(f"Error: could not make '{sink}' the default {args.kind}.",
+              file=sys.stderr)
+        return EXIT_ERROR
+
+    emit({"default": sink, "kind": args.kind},
+         f"Default {args.kind} is now {sink}", args.json)
+    return EXIT_OK
+
+
+def cmd_mute(args) -> int:
+    sink = resolve_or_report(args.sink, "sink", args)
+    if not sink:
+        return EXIT_ERROR
+
+    wanted = args.state.lower()
+    muted = wanted in ("on", "yes", "true", "1")
+
+    if not PactlRunner.set_sink_mute(sink, muted):
+        print(f"Error: could not {'mute' if muted else 'unmute'} {sink}.",
+              file=sys.stderr)
+        return EXIT_ERROR
+
+    emit({"sink": sink, "muted": muted},
+         f"{sink} {'muted' if muted else 'unmuted'}", args.json)
+    return EXIT_OK
+
+
 def resolve_or_report(name: str, role: str, args) -> Optional[str]:
     """Resolve a user-supplied sink name, or print why it failed.
 
@@ -363,6 +504,32 @@ def _setup_route(p: argparse.ArgumentParser) -> None:
     p.add_argument("target", help="sink the monitor is played into")
 
 
+def _setup_create(p: argparse.ArgumentParser) -> None:
+    p.add_argument("kind", choices=["sink", "source", "both"],
+                   help="what kind of virtual device to create")
+    p.add_argument("name", help="device name, e.g. game or discord_mic")
+    p.add_argument("-d", "--description", help="human description (defaults to name)")
+    p.add_argument("-c", "--channels", type=int, default=2,
+                   help="channel count (default: 2)")
+    p.add_argument("--route-to",
+                   help="also route the new device to this sink")
+
+
+def _setup_volume(p: argparse.ArgumentParser) -> None:
+    p.add_argument("sink")
+    p.add_argument("percent", help="0-100, optionally with a %% sign")
+
+
+def _setup_default(p: argparse.ArgumentParser) -> None:
+    p.add_argument("kind", choices=["sink", "source"])
+    p.add_argument("name")
+
+
+def _setup_mute(p: argparse.ArgumentParser) -> None:
+    p.add_argument("sink")
+    p.add_argument("state", choices=["on", "off"], help="on or off")
+
+
 #: Flat commands: invoked directly as `pulsar <name> ...`, not through a
 #: subcommand group. `pulsar route game speakers` is the natural thing to
 #: type; burying it under `pulsar route create game speakers` would be
@@ -372,6 +539,26 @@ FLAT: Dict[str, Any] = {
         "handler": cmd_route,
         "help": "Route a sink's monitor into a target sink",
         "setup": _setup_route,
+    },
+    "create": {
+        "handler": cmd_create,
+        "help": "Create a virtual sink, source, or both",
+        "setup": _setup_create,
+    },
+    "volume": {
+        "handler": cmd_volume,
+        "help": "Set a sink's volume",
+        "setup": _setup_volume,
+    },
+    "default": {
+        "handler": cmd_default,
+        "help": "Set the default sink or source",
+        "setup": _setup_default,
+    },
+    "mute": {
+        "handler": cmd_mute,
+        "help": "Mute or unmute a sink",
+        "setup": _setup_mute,
     },
 }
 

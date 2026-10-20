@@ -9,7 +9,12 @@ import shutil
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pulsar.utils.paths import legacy_presets_dir, user_presets_dir
+from pulsar.utils.paths import (
+    legacy_presets_dir,
+    read_json_dict,
+    user_presets_dir,
+    write_json_atomic,
+)
 
 #: PresetManager and ProfileManager are different schemas that used to share
 #: this filename. They now have their own files so migrating one cannot
@@ -101,26 +106,22 @@ class PresetManager:
             pass
 
     def _load_user_presets(self) -> Dict[str, Any]:
-        """Load user presets from file."""
-        if not os.path.exists(self.presets_file):
-            return {}
+        """Load user presets from file.
 
-        try:
-            with open(self.presets_file) as f:
-                return json.load(f)
-        except (OSError, json.JSONDecodeError) as e:
-            print(f"Error loading presets: {e}")
-            return {}
+        A file that is missing, unparseable, or holds a JSON list rather
+        than an object all yield {}. A list used to propagate an
+        AttributeError out of dict.update() and stop the window opening.
+        """
+        return read_json_dict(self.presets_file)
 
     def _save_user_presets(self, presets: Dict[str, Any]) -> bool:
-        """Save user presets to file."""
-        try:
-            with open(self.presets_file, 'w') as f:
-                json.dump(presets, f, indent=2)
-            return True
-        except OSError as e:
-            print(f"Error saving presets: {e}")
-            return False
+        """Save user presets to file.
+
+        Atomic: the previous contents survive a failed write intact. See
+        write_json_atomic -- a plain open(..., 'w') truncates first and
+        turns a full disk into permanent loss of everything the user saved.
+        """
+        return write_json_atomic(self.presets_file, presets)
 
     def get_all_presets(self) -> Dict[str, Any]:
         """Get all presets (builtin + user)."""

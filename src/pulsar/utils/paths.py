@@ -10,9 +10,10 @@ and breaks in every packaged install, because there the working directory is
 a read-only bundle.
 """
 
+import json
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 #: Fallback when $XDG_DATA_HOME is unset, per the XDG Base Directory spec.
 XDG_DATA_HOME_FALLBACK = "~/.local/share"
@@ -82,3 +83,66 @@ def legacy_presets_dir() -> Optional[Path]:
         if candidate.is_dir():
             return candidate
     return None
+
+
+def write_json_atomic(path, data, indent=2) -> bool:
+    """Serialise ``data`` to ``path`` without ever destroying the old file.
+
+    Write to a sibling temp file, flush and fsync it, then ``os.replace``
+    over the target. Rename within a directory is atomic, so a reader sees
+    either the complete old file or the complete new one -- never a
+    half-written one.
+
+    Why this exists: the obvious ``open(path, 'w')`` TRUNCATES before
+    ``json.dump`` writes a single byte. A write that fails partway --
+    ENOSPC, EIO, a quota, an NFS remount -- leaves unparseable garbage
+    where the user's saved presets were, with no backup. Since these files
+    are the only record of work the user did by hand, that is silent,
+    permanent data loss from something the user experienced as a failed
+    save.
+
+    Returns True on success, False if anything went wrong. Never raises:
+    every caller here already handles failure by reporting it, and a
+    raised exception from a save path would take down the GUI.
+
+    A caller-supplied ``json.dump`` failure (the usual way this is
+    exercised) lands in the same handler: the temp file is removed and the
+    original is untouched, because it was never opened for writing.
+    """
+    target = Path(path)
+    temp = target.with_name(target.name + f".tmp{os.getpid()}")
+    try:
+        with open(temp, "w") as handle:
+            json.dump(data, handle, indent=indent)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, target)
+        return True
+    except (OSError, TypeError, ValueError):
+        # Leave the original exactly as it was and drop the partial temp.
+        try:
+            if temp.exists():
+                temp.unlink()
+        except OSError:
+            pass
+        return False
+
+
+def read_json_dict(path) -> Dict[str, Any]:
+    """Load JSON, returning {} for anything unusable.
+
+    Returns {} rather than raising when the file is missing, unreadable,
+    not valid JSON, or valid JSON whose top level is not an object -- a
+    list or a bare string where a dict of entries belongs. The callers
+    merge this into their data, and a list would propagate an
+    ``AttributeError`` on ``.update()`` straight into the GUI -- in one
+    case far enough to stop the window opening at all.
+    """
+    try:
+        with open(path) as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return data

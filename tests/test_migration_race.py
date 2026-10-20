@@ -67,19 +67,24 @@ class MigrationRaceTestCase(unittest.TestCase):
             json.dump(LEGACY, fh, indent=1)
 
         self.xdg = os.path.join(self._tmp, "xdg")
-        self._patchers = [
-            mock.patch.dict(os.environ, {
-                "XDG_DATA_HOME": self.xdg,
-                "HOME": self._tmp,
-            }),
-            mock.patch("os.getcwd", return_value=self.cwd),
-        ]
-        for p in self._patchers:
-            p.start()
+        self._env = mock.patch.dict(os.environ, {
+            "XDG_DATA_HOME": self.xdg,
+            "HOME": self._tmp,
+        })
+        self._env.start()
+        # os.chdir rather than patching os.getcwd. legacy_presets_dir() asks
+        # pathlib for the CWD, and how that resolves is a pathlib
+        # implementation detail that has moved between the versions this
+        # project supports -- a getcwd mock passed on 3.14 and failed on
+        # every version CI runs. Every other migration test in this repo
+        # chdirs; so does this one.
+        self._real_cwd = os.getcwd()
+        os.chdir(self.cwd)
+        self.addCleanup(self._restore)
 
-    def tearDown(self):
-        for p in self._patchers:
-            p.stop()
+    def _restore(self):
+        os.chdir(self._real_cwd)
+        self._env.stop()
         shutil.rmtree(self._tmp, ignore_errors=True)
 
     def _read(self, name):
@@ -175,17 +180,16 @@ class TestFlatLegacyShape(MigrationRaceTestCase):
                 "OldProfile": {"schema_version": 2, "devices": [], "routing": []},
             }, fh)
         self.xdg = os.path.join(self._tmp, "xdg")
-        self._patchers = [
-            mock.patch.dict(os.environ, {"XDG_DATA_HOME": self.xdg,
-                                         "HOME": self._tmp}),
-            mock.patch("os.getcwd", return_value=self.cwd),
-        ]
-        for p in self._patchers:
-            p.start()
+        self._env = mock.patch.dict(os.environ, {"XDG_DATA_HOME": self.xdg,
+                                                  "HOME": self._tmp})
+        self._env.start()
+        self._real_cwd = os.getcwd()
+        os.chdir(self.cwd)
+        self.addCleanup(self._restore)
 
-    def tearDown(self):
-        for p in self._patchers:
-            p.stop()
+    def _restore(self):
+        os.chdir(self._real_cwd)
+        self._env.stop()
         shutil.rmtree(self._tmp, ignore_errors=True)
 
     def _read(self, name):

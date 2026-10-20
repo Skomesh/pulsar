@@ -559,6 +559,52 @@ class PactlRunner:
             logger=logger,
         )
 
+    #: Marker stamped into `sink_properties` on every device this program
+    #: creates. `module-null-sink` carries `sink_properties=` through to the
+    #: node's property list, and pactl reports the raw module arguments, so
+    #: this is a reliable way to answer "did we make this?" rather than
+    #: guessing from the name.
+    #:
+    #: Namespaced under `pulsar.` on purpose: a bare `managed` would collide
+    #: with another program's property of the same name, and a collision
+    #: here means deleting someone else's device.
+    MANAGED_PROPERTY = "pulsar.managed=true"
+
+    @staticmethod
+    def _with_managed_property(sink_properties: Optional[str]) -> str:
+        """Merge the ownership marker into caller-supplied sink properties.
+
+        SPACE separated, not comma. This is not a style choice:
+
+            $ pactl load-module module-null-sink sink_name=p \
+                  sink_properties=device.description=MyThing,pulsar.managed=true
+            Description: MyThing,pulsar.managed=true
+
+        The comma is swallowed into the preceding property's value, so the
+        marker becomes part of the user's description and the caller's own
+        property is corrupted. With a space the same command yields two
+        clean properties. PulseAudio's sink_properties syntax is
+        `key=value key2=value2`; PipeWire follows it.
+
+        A caller-supplied `pulsar.managed` is dropped rather than
+        duplicated, so the marker cannot be spoofed away and leave a device
+        this program can never clean up.
+        """
+        parts = []
+        for chunk in (sink_properties or "").replace(",", " ").split():
+            if not chunk:
+                continue
+            if chunk.split("=", 1)[0].strip() == "pulsar.managed":
+                continue
+            parts.append(chunk)
+        parts.append(PactlRunner.MANAGED_PROPERTY)
+        return " ".join(parts)
+
+    @staticmethod
+    def _is_managed_module(module: Dict[str, Any]) -> bool:
+        """True if this null-sink module carries our ownership marker."""
+        return PactlRunner.MANAGED_PROPERTY in (module.get("argument") or "")
+
     @staticmethod
     def _create_null_sink(
         media_class: str,
@@ -607,26 +653,57 @@ class PactlRunner:
         if channel_map is not None:
             cmd_args.append(f'channel_map={channel_map}')
 
-        if sink_properties is not None:
-            cmd_args.append(f'sink_properties={sink_properties}')
+        # Ownership marker, always appended last so it survives whatever the
+        # caller passed and cannot be stripped by it. Merged into the
+        # caller's own properties rather than replacing them: a device
+        # carrying `device.api=game` still needs that key.
+        cmd_args.append(
+            f'sink_properties={PactlRunner._with_managed_property(sink_properties)}'
+        )
 
         output, return_code = PactlRunner.run_command(cmd_args, logger)
 
         return return_code == 0
 
     @staticmethod
-    def unload_all_null_sinks(logger=None) -> Tuple[int, List[str]]:
+    def unload_all_null_sinks(logger=None, only_managed: bool = True) -> Tuple[int, List[str]]:
         """
-        Unload all null sink modules.
+        Unload null sink modules created by this program.
+
+        Scoped to modules carrying `MANAGED_PROPERTY`. The previous
+        behaviour -- unload every `module-null-sink` on the machine --
+        was destructive: a user's Steam Streaming sink, OBS's dummy
+        output, or anything else built on module-null-sink disappeared,
+        and because null sinks are not persistent it did not come back on
+        the next login. Users also had no way to tell which devices were
+        safe to remove.
 
         Args:
             logger: Optional callback function to log command execution
+            only_managed: When False, fall back to unloading every
+                module-null-sink regardless of origin. Kept so a user who
+                genuinely wants a clean slate can still get one; it is not
+                the default, because the damage is not obvious in advance.
 
         Returns:
             A tuple containing (number_of_modules_unloaded, list_of_errors)
         """
         modules = PactlRunner.list_modules(logger)
         null_sink_modules = [m for m in modules if m.get('name') == 'module-null-sink']
+
+        if only_managed:
+            null_sink_modules = [m for m in null_sink_modules
+                                 if PactlRunner._is_managed_module(m)]
+        else:
+            # Say what is about to be destroyed. This path is opt-in and
+            # irreversible, so the count goes to the log rather than being
+            # applied silently.
+            unowned = len(null_sink_modules)
+            if logger and unowned:
+                logger(
+                    f"WARNING: removing ALL {unowned} null sink(s) including "
+                    f"ones this program did not create"
+                )
 
         successful = 0
         errors = []

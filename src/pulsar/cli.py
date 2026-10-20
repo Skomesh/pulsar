@@ -29,6 +29,12 @@ from typing import Any, Dict, List, Optional
 
 from pulsar.utils.pactl_runner import LoopbackCycleError, PactlRunner
 
+# Imported at module scope, not inside the handlers, so tests can patch
+# `cli.ProfileManager`. Ruff strips these as unused until the first handler
+# that needs them exists, which is why they have come and gone once.
+from pulsar.utils.preset_manager import PresetManager
+from pulsar.utils.profile_manager import ProfileManager
+
 EXIT_OK = 0
 EXIT_ERROR = 1
 EXIT_USAGE = 2
@@ -421,6 +427,163 @@ def cmd_mute(args) -> int:
     return EXIT_OK
 
 
+def resolve_profile(name: str) -> Optional[Dict[str, Any]]:
+    """Look a profile up by name, case-insensitively, or return None.
+
+    Profile names are long and human ("Stereo split (apps + voice)"), so
+    `profile apply stereo` should find the one called "Stereo" rather than
+    insist on the full string.
+    """
+    manager = ProfileManager()
+    if name in manager.get_profile_names():
+        return manager.get_profile(name)
+
+    lowered = name.lower()
+    matches = [n for n in manager.get_profile_names() if n.lower() == lowered]
+    if not matches:
+        matches = [n for n in manager.get_profile_names()
+                   if lowered in n.lower()]
+    if len(matches) == 1:
+        return manager.get_profile(matches[0])
+    return None
+
+
+def cmd_profile_list(args) -> int:
+    names = ProfileManager().get_profile_names()
+    profiles = [{"name": n} for n in names]
+    text = table([[n] for n in names], ["NAME"])
+    emit({"count": len(names), "profiles": profiles},
+         text if names else "No profiles found.", args.json)
+    return EXIT_OK
+
+
+def cmd_profile_show(args) -> int:
+    profile = resolve_profile(args.name)
+    if profile is None:
+        print(f"Error: no profile matching '{args.name}'.", file=sys.stderr)
+        print("Run `pulsar profile list`.", file=sys.stderr)
+        return EXIT_ERROR
+
+    lines = [profile.get("description") or "(no description)", ""]
+    devices = profile.get("devices") or []
+    lines.append("Devices:")
+    lines.append(table(
+        [[d.get("name", "?"), d.get("type", "?"), str(d.get("channels", "-")),
+          d.get("description", "")] for d in devices],
+        ["NAME", "TYPE", "CH", "DESCRIPTION"],
+    ) or "  (none)")
+
+    # `routing`, not `routes` -- the key is the one ProfileManager writes.
+    routes = profile.get("routing") or []
+    lines.append("")
+    lines.append("Routing:")
+    lines.append(table(
+        [[r.get("from", "?"), r.get("to", "?"), str(r.get("latency_msec", "-"))]
+         for r in routes],
+        ["FROM", "TO", "LATENCY MS"],
+    ) or "  (none)")
+
+    emit({"profile": profile}, "\n".join(lines), args.json)
+    return EXIT_OK
+
+
+def cmd_profile_apply(args) -> int:
+    """Apply a profile to the live audio server.
+
+    Goes through ProfileManager.apply_profile, which creates the devices,
+    builds the loopbacks through create_loopback -- so the feedback-loop
+    guard applies here too -- and rolls back on failure. Shelling out to
+    pactl directly would bypass all of it.
+    """
+    profile = resolve_profile(args.name)
+    if profile is None:
+        print(f"Error: no profile matching '{args.name}'.", file=sys.stderr)
+        print("Run `pulsar profile list`.", file=sys.stderr)
+        return EXIT_ERROR
+
+    result = ProfileManager().apply_profile(
+        profile, logger=(print if not args.json else None))
+
+    errors = result.get("errors") or []
+    created = result.get("created") or []
+
+    for message in errors:
+        print(f"Error: {message}", file=sys.stderr)
+
+    if errors:
+        emit({"applied": False, "errors": errors, "created": created},
+             "", args.json)
+        return EXIT_ERROR
+
+    text = f"Applied profile {args.name}."
+    if created:
+        text += "\n" + table([[c] for c in created], ["CREATED"])
+    emit({"applied": True, "errors": [], "created": created}, text, args.json)
+    return EXIT_OK
+
+
+def cmd_profile_delete(args) -> int:
+    if not ProfileManager().delete_profile(args.name):
+        print(f"Error: could not delete profile '{args.name}'.", file=sys.stderr)
+        return EXIT_ERROR
+    emit({"deleted": args.name}, f"Deleted profile {args.name}.", args.json)
+    return EXIT_OK
+
+
+def cmd_preset_list(args) -> int:
+    manager = PresetManager()
+    names = manager.get_preset_names()
+    presets = [{"name": n, "builtin": manager.is_builtin_preset(n)}
+               for n in names]
+    text = table([[n, "yes" if p["builtin"] else "no"] for n, p in
+                  ((x["name"], x) for x in presets)], ["NAME", "BUILTIN"])
+    emit({"count": len(names), "presets": presets},
+         text if names else "No presets found.", args.json)
+    return EXIT_OK
+
+
+def cmd_preset_show(args) -> int:
+    manager = PresetManager()
+    preset = manager.get_preset(args.name)
+    if preset is None:
+        print(f"Error: no preset named '{args.name}'.", file=sys.stderr)
+        return EXIT_ERROR
+
+    builtin = manager.is_builtin_preset(args.name)
+    lines = [f"{args.name}{' (builtin)' if builtin else ''}"]
+    lines.append(table([[k, str(v)] for k, v in sorted(preset.items())],
+                       ["KEY", "VALUE"]))
+    emit({"preset": preset, "builtin": builtin}, "\n".join(lines), args.json)
+    return EXIT_OK
+
+
+def cmd_preset_delete(args) -> int:
+    manager = PresetManager()
+    # A builtin ships with the package; deleting it edits the install, and
+    # on a read-only /usr that fails in a way the user cannot act on.
+    if manager.is_builtin_preset(args.name):
+        print(f"Error: '{args.name}' is a builtin preset and cannot be "
+              f"deleted.", file=sys.stderr)
+        return EXIT_ERROR
+    if not manager.delete_preset(args.name):
+        print(f"Error: could not delete preset '{args.name}'.", file=sys.stderr)
+        return EXIT_ERROR
+    emit({"deleted": args.name}, f"Deleted preset {args.name}.", args.json)
+    return EXIT_OK
+
+
+def _setup_named(p: argparse.ArgumentParser) -> None:
+    p.add_argument("name")
+
+
+def _setup_profile(p: argparse.ArgumentParser) -> None:
+    p.add_argument("name", help="profile name, or any unambiguous part of it")
+
+
+def _setup_preset(p: argparse.ArgumentParser) -> None:
+    p.add_argument("name")
+
+
 def resolve_or_report(name: str, role: str, args) -> Optional[str]:
     """Resolve a user-supplied sink name, or print why it failed.
 
@@ -584,6 +747,43 @@ GROUPS: Dict[str, Dict[str, Any]] = {
         "streams": {
             "handler": cmd_list_streams,
             "help": "List playing application streams",
+        },
+    },
+    "profile": {
+        "list": {
+            "handler": cmd_profile_list,
+            "help": "List available profiles",
+        },
+        "show": {
+            "handler": cmd_profile_show,
+            "help": "Show a profile's devices and routing",
+            "setup": _setup_profile,
+        },
+        "apply": {
+            "handler": cmd_profile_apply,
+            "help": "Apply a profile to the live audio server",
+            "setup": _setup_profile,
+        },
+        "delete": {
+            "handler": cmd_profile_delete,
+            "help": "Delete a saved profile",
+            "setup": _setup_named,
+        },
+    },
+    "preset": {
+        "list": {
+            "handler": cmd_preset_list,
+            "help": "List available presets",
+        },
+        "show": {
+            "handler": cmd_preset_show,
+            "help": "Show a preset's settings",
+            "setup": _setup_preset,
+        },
+        "delete": {
+            "handler": cmd_preset_delete,
+            "help": "Delete a user preset (builtins are refused)",
+            "setup": _setup_preset,
         },
     },
 }

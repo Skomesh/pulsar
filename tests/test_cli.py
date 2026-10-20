@@ -607,6 +607,131 @@ class TestVolumeAndDefault(CliTestBase):
         mute.assert_called_once_with("game", True)
 
 
+class TestProfiles(CliTestBase):
+    """Profiles touch live audio, so the shape here matters most.
+
+    Fixtures are the real one from $XDG_DATA_HOME: a profile is
+    {created, description, devices, routing, schema_version}, and the
+    routing entries use `from`/`to`/`latency_msec` -- `routes` was my
+    first guess and it is not the key.
+    """
+
+    PROFILE = {
+        "schema_version": 2,
+        "created": "2026-01-01T00:00:00",
+        "description": "Apps and voice",
+        "devices": [
+            {"name": "app_sink", "type": "sink", "channels": 2,
+             "description": "Application audio"},
+            {"name": "voice_sink", "type": "sink", "channels": 2,
+             "description": "Voice chat"},
+        ],
+        "routing": [
+            {"from": "app_sink", "to": "<AUTO_DEFAULT>", "latency_msec": 1},
+            {"from": "voice_sink", "to": "<AUTO_DEFAULT>", "latency_msec": 1},
+        ],
+    }
+
+    def mgr(self, **methods):
+        """Patch ProfileManager methods; keep everything else real."""
+        return mock.patch.multiple(cli.ProfileManager, **methods)
+
+    def test_lists_profile_names(self):
+        with self.mgr(get_profile_names=mock.Mock(
+                return_value=["Stereo split (apps + voice)"])):
+            payload = self.run_cli_json("profile", "list")
+
+        self.assertEqual(payload["count"], 1)
+        self.assertIn("Stereo split", payload["profiles"][0]["name"])
+
+    def test_show_prints_devices_and_routes_from_the_real_keys(self):
+        with self.mgr(get_profile=mock.Mock(return_value=self.PROFILE)):
+            code, out, _ = self.run_cli("profile", "show", "Stereo split")
+
+        self.assertEqual(code, 0)
+        self.assertIn("app_sink", out)
+        self.assertIn("voice_sink", out)
+        self.assertIn("AUTO_DEFAULT", out)
+
+    def test_apply_passes_the_profile_dict_not_the_name(self):
+        """apply_profile takes a dict; handing it a name would be a TypeError."""
+        applied = mock.Mock(return_value={"errors": [], "created": []})
+        with self.mgr(get_profile=mock.Mock(return_value=self.PROFILE),
+                      apply_profile=applied):
+            code, _, _ = self.run_cli("profile", "apply", "Stereo split")
+
+        self.assertEqual(code, 0)
+        self.assertIs(applied.call_args[0][0], self.PROFILE)
+
+    def test_apply_reports_a_failure_from_the_result(self):
+        failed = mock.Mock(return_value={"errors": ["no sink 'voice_sink'"],
+                                         "created": ["app_sink"]})
+        with self.mgr(get_profile_names=mock.Mock(return_value=["Broken"]),
+                      get_profile=mock.Mock(return_value=self.PROFILE),
+                      apply_profile=failed):
+            code, _, err = self.run_cli("profile", "apply", "Broken")
+
+        self.assertEqual(code, EXIT_ERROR)
+        self.assertIn("voice_sink", err)
+
+    def test_apply_of_a_missing_profile_is_an_error(self):
+        with self.mgr(get_profile_names=mock.Mock(return_value=["Other"])):
+            code, _, err = self.run_cli("profile", "apply", "nosuch")
+        self.assertEqual(code, EXIT_ERROR)
+        self.assertIn("nosuch", err)
+
+    def test_apply_matches_a_partial_profile_name(self):
+        """Profile names are long; `apply stereo` should find the one."""
+        applied = mock.Mock(return_value={"errors": [], "created": []})
+        with self.mgr(
+            get_profile_names=mock.Mock(return_value=["Stereo split (apps + voice)"]),
+            get_profile=mock.Mock(return_value=self.PROFILE),
+            apply_profile=applied,
+        ):
+            code, _, _ = self.run_cli("profile", "apply", "stereo split")
+
+        self.assertEqual(code, 0)
+        applied.assert_called_once()
+
+    def test_delete_uses_the_manager(self):
+        with self.mgr(delete_profile=mock.Mock(return_value=True)):
+            code, out, _ = self.run_cli("profile", "delete", "Old")
+        self.assertEqual(code, 0)
+
+
+class TestPresets(CliTestBase):
+    PRESET = {"channels": "2", "channel_map": "front-left,front-right",
+              "description": "Stereo Virtual Device", "builtin": True}
+
+    def mgr(self, **methods):
+        return mock.patch.multiple(cli.PresetManager, **methods)
+
+    def test_lists_preset_names(self):
+        with self.mgr(get_preset_names=mock.Mock(return_value=["Stereo", "Mono"])):
+            payload = self.run_cli_json("preset", "list")
+
+        self.assertEqual(payload["count"], 2)
+        self.assertEqual(payload["presets"][0]["name"], "Stereo")
+
+    def test_show_marks_builtins(self):
+        """A builtin cannot be deleted, so the CLI has to say which it is."""
+        with self.mgr(get_preset=mock.Mock(return_value=self.PRESET),
+                      is_builtin_preset=mock.Mock(return_value=True)):
+            code, out, _ = self.run_cli("preset", "show", "Stereo")
+
+        self.assertEqual(code, 0)
+        self.assertIn("Stereo", out)
+        self.assertIn("builtin", out.lower())
+
+    def test_delete_refuses_a_builtin(self):
+        with self.mgr(is_builtin_preset=mock.Mock(return_value=True),
+                      delete_preset=mock.Mock(return_value=True)):
+            code, _, err = self.run_cli("preset", "delete", "Stereo")
+
+        self.assertEqual(code, EXIT_ERROR)
+        self.assertIn("builtin", err.lower())
+
+
 class TestExitCodes(CliTestBase):
     def test_unknown_command_exits_nonzero(self):
         code, _, err = self.run_cli("list", "bananas")

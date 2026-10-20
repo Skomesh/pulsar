@@ -127,11 +127,14 @@ plugs:
     interface: pipewire
 
 apps:
-  pulsar:
-    # The console script installed by pyproject's [project.scripts]. The
-    # python plugin creates a venv in $CRAFT_PART_INSTALL, so it lands at
-    # bin/pulsar inside the snap and snapcraft resolves it on $PATH.
-    command: bin/pulsar
+  pulsar-gui:
+    # The GUI console script installed by pyproject's [project.scripts].
+    # The python plugin creates a venv in $CRAFT_PART_INSTALL, so it lands
+    # at bin/pulsar-gui inside the snap and snapcraft resolves it on
+    # $PATH. `pulsar` is the command-line interface and must not be used
+    # here -- pointing a desktop-launch wrapper at the CLI would install
+    # cleanly and open nothing.
+    command: bin/pulsar-gui
     # desktop-launch is the standard wrapper for GUI snaps: it sets up
     # XDG_RUNTIME_DIR/DISPLAY/WAYLAND_DISPLAY and XDG_DATA_DIRS so the app
     # finds its own icons and themes. It comes from the desktop content snap
@@ -312,7 +315,7 @@ parts:
       Name=Pulsar
       GenericName=Audio Routing
       Comment=Graphical audio routing manager for PulseAudio and PipeWire
-      Exec=pulsar
+      Exec=pulsar-gui
       Icon=pulsar
       Terminal=false
       Categories=AudioVideo;Audio;Settings;Mixer;

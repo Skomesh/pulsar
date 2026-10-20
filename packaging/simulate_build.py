@@ -147,7 +147,7 @@ def simulate_snap():
         check(desktop.is_file(), "primed pulsar.desktop exists at the path apps.desktop names")
         if desktop.is_file():
             text = desktop.read_text()
-            check("Exec=pulsar" in text, "primed desktop file has Exec=pulsar")
+            check("Exec=pulsar-gui" in text, "primed desktop file execs pulsar-gui")
             check("Icon=pulsar" in text, "primed desktop file has Icon=pulsar")
             check("PLACEHOLDER_EXEC_PATH" not in text,
                   "primed desktop file has no PLACEHOLDER_EXEC_PATH")
@@ -225,14 +225,18 @@ def simulate_flatpak(rel, label):
         check(desktop.is_file(), f"primed {app_id}.desktop exists")
         if desktop.is_file():
             text = desktop.read_text()
-            check("Exec=pulsar" in text, "primed desktop file has Exec=pulsar")
+            check("Exec=pulsar-gui" in text, "primed desktop file execs pulsar-gui")
             check(f"Icon={app_id}" in text, f"primed desktop file has Icon={app_id}")
             check("PLACEHOLDER_EXEC_PATH" not in text,
                   "primed desktop file has no PLACEHOLDER_EXEC_PATH")
 
         # the launcher
-        launcher = dest / "bin/pulsar"
-        check(launcher.is_file(), "primed /app/bin/pulsar launcher exists")
+        # Both names: the desktop entry execs pulsar-gui, and a user
+        # typing `pulsar` in the sandbox should get the CLI.
+        for launcher_name in ("pulsar", "pulsar-gui"):
+            launcher = dest / "bin" / launcher_name
+            check(launcher.is_file(),
+                  f"primed /app/bin/{launcher_name} launcher exists")
         if launcher.is_file():
             check(launcher.stat().st_mode & 0o111, "launcher is executable")
             body = launcher.read_text()

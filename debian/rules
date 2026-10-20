@@ -93,7 +93,7 @@ override_dh_auto_install:
 	#     PLACEHOLDER_EXEC_PATH is a broken launcher for every user who
 	#     installs from the .deb rather than the git checkout. So the
 	#     placeholder is replaced here with the path the console script
-	#     actually gets (/usr/bin/pulsar, from the [project.scripts] entry
+	#     actually gets (/usr/bin/pulsar-gui, from the [project.scripts] entry
 	#     point in pyproject.toml).
 	#
 	# NOTE ON /usr/share/pulsar: deliberately not created, and nothing below
@@ -105,7 +105,7 @@ override_dh_auto_install:
 	# then break every future release's ability to ship new built-in presets.
 	# The built-in profiles ship inside the wheel as package data
 	# (pulsar/utils/presets/builtin_profiles.json) and are read-only.
-	sed -e 's|PLACEHOLDER_EXEC_PATH|/usr/bin/pulsar|g' pulsar.desktop \
+	sed -e 's|PLACEHOLDER_EXEC_PATH|/usr/bin/pulsar-gui|g' pulsar.desktop \
 		> debian/pulsar/usr/share/applications/pulsar.desktop
 	chmod 0644 debian/pulsar/usr/share/applications/pulsar.desktop
 	# Install the README next to the manual page-less binary so the

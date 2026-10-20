@@ -798,18 +798,16 @@ class PactlRunner:
         """
         if not source_monitor or not sink:
             return None
-        if not source_monitor.endswith(".monitor"):
-            return None
 
-        source_sink = source_monitor[: -len(".monitor")]
+        source_sink = PactlRunner._origin_sink(source_monitor)
 
         edges: Dict[str, List[str]] = {}
         for lb in loopbacks:
             src = (lb.get("source") or "").strip()
             dst = (lb.get("sink") or "").strip()
-            if not src or not dst or not src.endswith(".monitor"):
+            if not src or not dst:
                 continue
-            edges.setdefault(src[: -len(".monitor")], []).append(dst)
+            edges.setdefault(PactlRunner._origin_sink(src), []).append(dst)
 
         # A sink routed to itself is the degenerate cycle.
         if source_sink == sink:
@@ -820,21 +818,51 @@ class PactlRunner:
         # loop. Reporting starts at the source so it reads as "the route you
         # asked for, then the path back", e.g. music -> game -> voice ->
         # music.
-        path = [sink]
-        seen = {sink}
+        #
+        # `parent` records how each node was reached. Without it the chain
+        # is assembled in discovery order, which splices sibling branches
+        # together and invents edges that do not exist.
+        parent: Dict[str, Optional[str]] = {sink: None}
         stack = [sink]
         while stack:
             node = stack.pop()
             if node == source_sink:
-                # `path` already ends at the source, so the chain is the
-                # source, the route asked for, the path back, done.
-                return [source_sink] + path
+                return [source_sink] + PactlRunner._path_to(parent, sink, source_sink)
             for nxt in edges.get(node, ()):
-                if nxt not in seen:
-                    seen.add(nxt)
-                    path.append(nxt)
+                if nxt not in parent:
+                    parent[nxt] = node
                     stack.append(nxt)
         return None
+
+    @staticmethod
+    def _origin_sink(source: str) -> str:
+        """The sink a loopback source originates from.
+
+        `module-loopback` accepts both `<sink>.monitor` and a bare `<sink>`,
+        and PulseAudio loads the bare form with rc=0 and no warning. Both
+        name the same sink, so both have to normalise to one node or the
+        edge is invisible to the cycle check.
+
+        Only a trailing `.monitor` is stripped. `str.split('.')[0]` would
+        be the obvious way and is wrong: real device names contain dots
+        (`alsa_output.pci`, `bluez_sink.built_in`) and would be truncated
+        to `alsa_output`.
+        """
+        text = (source or "").strip()
+        if text.endswith(".monitor"):
+            return text[: -len(".monitor")]
+        return text
+
+    @staticmethod
+    def _path_to(parent: Dict[str, Optional[str]], start: str, end: str) -> List[str]:
+        """Rebuild the path start -> ... -> end from a parent map."""
+        path = [end]
+        node = end
+        while node != start and parent.get(node) is not None:
+            node = parent[node]  # type: ignore[index]
+            path.append(node)
+        path.reverse()
+        return path
 
     @staticmethod
     def create_loopback(

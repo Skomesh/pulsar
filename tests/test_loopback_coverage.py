@@ -109,7 +109,11 @@ class TestChainNamesOnlyRealEdges(unittest.TestCase):
         chain = PactlRunner.loopback_cycle(loopbacks, "music.monitor", "game")
         self.assertIsNotNone(chain)
 
-        real = {(e["source"].removesuffix(".monitor"), e["sink"]) for e in loopbacks}
+        # slice, not str.removesuffix: that is 3.9+ and CI runs 3.8
+        def _origin(s):
+            return s[:-len(".monitor")] if s.endswith(".monitor") else s
+
+        real = {(_origin(e["source"]), e["sink"]) for e in loopbacks}
         # The chain is [source, target, ...path back..., ]. Its FIRST pair is
         # the route being proposed, which by definition does not exist yet.
         # Every other pair must be a route already in place.

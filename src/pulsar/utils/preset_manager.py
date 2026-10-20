@@ -5,11 +5,17 @@ Handles saving, loading, and managing custom audio presets.
 
 import json
 import os
-import shutil
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pulsar.utils.paths import legacy_presets_dir, user_presets_dir
+from pulsar.utils.paths import (
+    legacy_presets_dir,
+    looks_like_preset_entry,
+    read_json_dict,
+    take_legacy_section,
+    user_presets_dir,
+    write_json_atomic,
+)
 
 #: PresetManager and ProfileManager are different schemas that used to share
 #: this filename. They now have their own files so migrating one cannot
@@ -91,36 +97,36 @@ class PresetManager:
         old_file = os.path.join(str(legacy), "user_presets.json")
         if not os.path.isfile(old_file):
             return
-        try:
-            shutil.copyfile(old_file, self.presets_file)
-            old_backup = old_file + ".migrated"
-            os.replace(old_file, old_backup)
-        except OSError:
-            # A failed migration must not stop the app from starting; the
-            # user can still save new presets to the XDG location.
-            pass
+        # Take ONLY the presets section. This used to copy the entire
+        # legacy file -- profiles and all -- into the presets file and then
+        # rename the source away, which left ProfileManager with nothing to
+        # migrate and silently cost the user every profile they had saved.
+        # See issue #14.
+        #
+        # A failure here must not stop the app starting; the user can still
+        # save new presets to the XDG location.
+        take_legacy_section(old_file, self.presets_file,
+                            my_key="presets", other_keys=("profiles",),
+                            whole_file_is_mine=True,
+                            entry_filter=looks_like_preset_entry)
 
     def _load_user_presets(self) -> Dict[str, Any]:
-        """Load user presets from file."""
-        if not os.path.exists(self.presets_file):
-            return {}
+        """Load user presets from file.
 
-        try:
-            with open(self.presets_file) as f:
-                return json.load(f)
-        except (OSError, json.JSONDecodeError) as e:
-            print(f"Error loading presets: {e}")
-            return {}
+        A file that is missing, unparseable, or holds a JSON list rather
+        than an object all yield {}. A list used to propagate an
+        AttributeError out of dict.update() and stop the window opening.
+        """
+        return read_json_dict(self.presets_file)
 
     def _save_user_presets(self, presets: Dict[str, Any]) -> bool:
-        """Save user presets to file."""
-        try:
-            with open(self.presets_file, 'w') as f:
-                json.dump(presets, f, indent=2)
-            return True
-        except OSError as e:
-            print(f"Error saving presets: {e}")
-            return False
+        """Save user presets to file.
+
+        Atomic: the previous contents survive a failed write intact. See
+        write_json_atomic -- a plain open(..., 'w') truncates first and
+        turns a full disk into permanent loss of everything the user saved.
+        """
+        return write_json_atomic(self.presets_file, presets)
 
     def get_all_presets(self) -> Dict[str, Any]:
         """Get all presets (builtin + user)."""

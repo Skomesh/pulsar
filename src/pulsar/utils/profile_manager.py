@@ -55,14 +55,21 @@ import json
 import os
 import re
 import shlex
-import shutil
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from pulsar.utils.pactl_runner import LoopbackCycleError, PactlRunner
-from pulsar.utils.paths import legacy_presets_dir, user_presets_dir
+from pulsar.utils.paths import (
+    legacy_presets_dir,
+    looks_like_profile_entry,
+    read_json_dict,
+    take_legacy_section,
+    user_presets_dir,
+    write_json_atomic,
+)
 
 CURRENT_SCHEMA_VERSION = 2
+
 
 #: Profiles have their own file. This used to be "user_presets.json", shared
 #: with PresetManager despite being a different schema, so one manager's save
@@ -131,28 +138,33 @@ class ProfileManager:
         old_file = os.path.join(str(legacy), LEGACY_USER_PRESETS_FILENAME)
         if not os.path.isfile(old_file):
             return
-        try:
-            shutil.copyfile(old_file, self.presets_file)
-            os.replace(old_file, old_file + ".migrated")
-        except OSError:
-            pass
+        # Take ONLY the profiles section. Copying the whole legacy file and
+        # renaming the source away meant whichever manager ran first
+        # consumed both halves and the other lost its data entirely --
+        # reproduced in both orders, see issue #14. The legacy file is left
+        # in place until the preset manager has taken its own section.
+        take_legacy_section(old_file, self.presets_file,
+                            my_key="profiles", other_keys=("presets",),
+                            whole_file_is_mine=True,
+                            entry_filter=looks_like_profile_entry)
 
     def _load_raw(self) -> Dict[str, Any]:
-        if not os.path.exists(self.presets_file):
-            return {}
-        try:
-            with open(self.presets_file) as f:
-                return json.load(f)
-        except (OSError, json.JSONDecodeError):
-            return {}
+        """Load the profile file, tolerating anything unusable.
+
+        A JSON list where an object belongs used to reach `raw.items()`
+        and raise AttributeError out of load_all_profiles, which the GUI
+        calls during startup -- so the window would not open at all.
+        """
+        return read_json_dict(self.presets_file)
 
     def _save_raw(self, data: Dict[str, Any]) -> bool:
-        try:
-            with open(self.presets_file, "w") as f:
-                json.dump(data, f, indent=2)
-            return True
-        except OSError:
-            return False
+        """Write the profile file atomically.
+
+        The old contents survive a failed write intact. open(..., 'w')
+        truncates before json.dump runs, so a disk-full turned one failed
+        save into the loss of every profile the user had.
+        """
+        return write_json_atomic(self.presets_file, data)
 
     # ------------------------------------------------------------------
     # Schema migration

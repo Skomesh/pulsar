@@ -805,7 +805,15 @@ class MainWindow:
         self.remove_null_sinks_button.pack(side=tk.LEFT, padx=5)
 
         # Routing frame — lets the user wire a selected virtual sink to a real output
+        # Attached here, not left to float: the frame was built and fully
+        # populated but never given a geometry manager, so `winfo_manager()`
+        # stayed '' and the whole section -- this dropdown, the status line
+        # and the Multi-output Routing panel nested inside -- was invisible
+        # and unreachable. No test caught it because test_tab_refresh.py
+        # drives handlers on object.__new__(MainWindow), where no widget is
+        # ever packed and display is unobservable.
         self.routing_frame = ttk.LabelFrame(frame, text="Routing")
+        self.routing_frame.pack(fill=tk.X, pady=5)  # matches button_frame
         self.routing_frame.columnconfigure(1, weight=1)
 
         # --- Single-output routing (legacy dropdown) -------------------

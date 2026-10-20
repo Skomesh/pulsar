@@ -105,9 +105,16 @@ override_dh_auto_install:
 	# then break every future release's ability to ship new built-in presets.
 	# The built-in profiles ship inside the wheel as package data
 	# (pulsar/utils/presets/builtin_profiles.json) and are read-only.
+	# NOT `> debian/pulsar/usr/share/applications/pulsar.desktop`: nothing
+	# creates that directory. There is no debian/pulsar.install or .dirs,
+	# and the wheel ships no desktop file, so dh_python3 never makes it.
+	# A bare redirect fails with ENOENT and aborts make -- no .deb at all.
+	# `install -D` below creates parents, which is why the icon and doc
+	# installs work and this one did not.
 	sed -e 's|PLACEHOLDER_EXEC_PATH|/usr/bin/pulsar-gui|g' pulsar.desktop \
-		> debian/pulsar/usr/share/applications/pulsar.desktop
-	chmod 0644 debian/pulsar/usr/share/applications/pulsar.desktop
+		> /tmp/pulsar.desktop
+	install -D -m 0644 /tmp/pulsar.desktop \
+		debian/pulsar/usr/share/applications/pulsar.desktop
 	# Install the README next to the manual page-less binary so the
 	# documentation the .deb ships is the one upstream wrote.
 	install -D -m 0644 README.md debian/pulsar/usr/share/doc/pulsar/README.md

@@ -172,12 +172,21 @@ jobs:
                       % top
                   )
 
-          # The preset data must actually ship as a .json payload.
+          # The wheel must NOT ship built-in profile data. The three shipped
+          # profiles were removed deliberately, so a .json payload showing up
+          # in the wheel means a stale build/ or src/pulsar.egg-info/ leaked
+          # the deleted file back into the build -- which is easy to miss,
+          # because the app reads profiles from the XDG data dir and works
+          # perfectly well either way.
           data = [n for n in names if n.endswith(".json")]
-          if not data:
-              errors.append("no preset .json shipped; built-in profiles would be empty")
+          if data:
+              errors.append(
+                  "wheel ships built-in profile data %s; the built-in "
+                  "profiles were removed and this is stale build output"
+                  % data
+              )
           else:
-              print("preset data:", data)
+              print("no built-in profile data shipped (expected)")
 
           for e in errors:
               print("::error::" + e)

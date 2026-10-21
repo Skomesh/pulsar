@@ -34,6 +34,35 @@ cd pulsar
 python3 -m pulsar
 ```
 
+## Where built packages land: `dist/`
+
+**Every packaging format writes to `dist/` at the repo root.** Same
+directory locally and in CI. `dist/` is gitignored — it is build output.
+
+| Format | Filename in `dist/` | Buildable on this machine? |
+|---|---|---|
+| AppImage | `pulsar-<version>-<arch>.AppImage` | yes — `scripts/build_appimage.sh` |
+| deb | `pulsar_<version>_all.deb` | yes — `scripts/build_deb.sh` |
+| rpm | `pulsar-<version>-1.<dist>.noarch.rpm` | yes (Fedora, or a Fedora-shaped toolchain) — `scripts/build_rpm.sh` |
+| snap | `pulsar_<version>_amd64.snap` | **no** — needs snapd; CI only |
+| flatpak | `pulsar-<version>.flatpak` | **no** — needs the freedesktop SDK download; CI only |
+
+`<version>` comes from `version` in `pyproject.toml`, which is the single
+source of truth for every filename above.
+
+```sh
+ls -la dist/     # all built packages, all formats
+```
+
+Note that the deb and the rpm land in `dist/` only through the wrapper
+scripts above. Running `dpkg-buildpackage` or `rpmbuild` by hand drops the
+artifact outside `dist/` — a raw `dpkg-buildpackage` writes to the
+*parent* of the checkout. Use the wrappers so you and CI cannot disagree
+about what a release contains.
+
+`packaging/README.md` has the per-format requirements and the record of
+which formats have actually been built end-to-end.
+
 ## Running tests
 
 Run the test suite from the project root:

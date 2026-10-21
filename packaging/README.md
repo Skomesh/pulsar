@@ -3,6 +3,56 @@
 Five formats, one source tree. This file is the map: what each format
 needs, how to build it here, and what has actually been verified.
 
+---
+
+## Where the artifacts land: `dist/`
+
+**Every built package goes in `dist/` at the repo root.** One directory,
+all five formats, same names locally and in CI. `dist/` is gitignored —
+it is build output, not source.
+
+```
+dist/
+├── pulsar-0.1.0-x86_64.AppImage      # AppImage
+├── pulsar_0.1.0_all.deb              # deb
+├── pulsar-0.1.0-1.fc42.noarch.rpm    # rpm
+├── pulsar_0.1.0_amd64.snap           # snap
+└── pulsar-0.1.0.flatpak              # flatpak
+```
+
+| Format | Filename in `dist/` | Build it with |
+|---|---|---|
+| **AppImage** | `pulsar-<version>-<arch>.AppImage` | `scripts/build_appimage.sh` |
+| **deb** | `pulsar_<version>_all.deb` | `scripts/build_deb.sh` |
+| **rpm** | `pulsar-<version>-1.<dist>.noarch.rpm` | `scripts/build_rpm.sh` |
+| **snap** | `pulsar_<version>_amd64.snap` | `snapcraft --destructive-mode && cp ./*.snap dist/` |
+| **flatpak** | `pulsar-<version>.flatpak` | `flatpak build-bundle` (see the release workflow) |
+
+`<version>` is `version` in `pyproject.toml` — the single source of truth
+for every filename above. `<arch>` is the build machine's architecture
+(`x86_64` or `aarch64`). `<dist>` is the RPM dist tag (`.fc42` on Fedora).
+
+### Which of these can be built where
+
+The table above lists the names, not a promise that this machine can
+produce them. What is actually buildable, and what was verified by really
+running the build, is in [What is verified, and what is not](#what-is-verified-and-what-is-not)
+at the bottom of this file. In short: **deb, rpm and AppImage build here;
+snap and flatpak do not** (no snapd on this box, and the freedesktop SDK is
+a download this box does not fetch). Those two are built only by the
+release workflow.
+
+### Two formats needed a wrapper to get here
+
+`dpkg-buildpackage` writes its `.deb` to the **parent** of the source tree
+— `~/gh/pulsar_0.1.0_all.deb`, one directory above the checkout, outside
+every `ls` anyone runs. `rpmbuild` writes into its `_topdir`, which is
+scratch. Neither puts anything in a place a human looks.
+`scripts/build_deb.sh` and `scripts/build_rpm.sh` wrap both, move the
+artifact into `dist/`, and print the path. The release workflow calls the
+same two scripts, so CI and a local build cannot disagree about a
+filename.
+
 Run `scripts/check_packaging_consistency.py` before any release. It is the
 gate that catches the failure mode of having five formats: they disagree
 silently until someone ships a mislabelled artifact.

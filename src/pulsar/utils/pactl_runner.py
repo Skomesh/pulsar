@@ -623,7 +623,12 @@ class PactlRunner:
         Args:
             media_class: One of 'Audio/Sink', 'Audio/Source', or 'Audio/Duplex'.
             name: Sink identifier.
-            description: Human-readable description (unused in command, kept for API compat).
+            description: Human-readable description. Passed to PulseAudio
+                as ``device.description`` in sink_properties, so it shows up
+                in `pactl list sinks`. Previously documented as 'unused in
+                command' and genuinely dropped, which is why the GUI's
+                Description field appeared to do nothing -- see issue on
+                user testing feedback.
             channels: Number of channels.
             rate: Sample rate in Hz (optional).
             format: Sample format (optional).
@@ -657,9 +662,32 @@ class PactlRunner:
         # caller passed and cannot be stripped by it. Merged into the
         # caller's own properties rather than replacing them: a device
         # carrying `device.api=game` still needs that key.
-        cmd_args.append(
-            f'sink_properties={PactlRunner._with_managed_property(sink_properties)}'
-        )
+        properties = PactlRunner._with_managed_property(sink_properties)
+
+        # The description reaches PulseAudio as device.description, which is
+        # what makes it show up in `pactl list sinks`. It used to be
+        # accepted and dropped, so the GUI's Description field appeared to
+        # do nothing.
+        #
+        # Spaces are NOT representable. PulseAudio's sink_properties parser
+        # splits on whitespace with no quoting and no escaping -- measured
+        # on a live server:
+        #
+        #     device.description=My Rig        -> Description: My
+        #     device.description='My Rig'      -> Description: My
+        #     device.description="My Rig"      -> Description: My
+        #     device.description=Game\ Output  -> Description: Game
+        #
+        # So a multi-word description is silently truncated at the first
+        # space, which is worse than not setting it. Underscores survive,
+        # and PulseAudio itself writes underscores in device names, so it
+        # is the least surprising substitute available.
+        if description and "device.description" not in properties:
+            safe = "_".join(str(description).split())
+            if safe:
+                properties = f"device.description={safe} {properties}"
+
+        cmd_args.append(f"sink_properties={properties}")
 
         output, return_code = PactlRunner.run_command(cmd_args, logger)
 

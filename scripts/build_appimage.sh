@@ -529,10 +529,8 @@ install_wheel() {
 
     [ -f "$site_packages/pulsar/__main__.py" ] \
         || die "wheel did not install pulsar/__main__.py into $site_packages"
-    # package-data: the wheel must carry the built-in profiles or the app
-    # starts with an empty preset list.
-    [ -f "$site_packages/pulsar/utils/presets/builtin_profiles.json" ] \
-        || die "wheel is missing pulsar/utils/presets/builtin_profiles.json (package-data not built?)"
+    # Pulsar ships no package data: the profile list is only what the
+    # user saved, so there is no preset JSON to find in the wheel.
 }
 
 # --- launchers, desktop entry, icons ------------------------------------

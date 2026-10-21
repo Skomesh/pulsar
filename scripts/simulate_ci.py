@@ -73,10 +73,12 @@ def check_wheel(wheel):
             )
 
     data = [n for n in names if n.endswith(".json")]
-    if not data:
-        fail("wheel", "no preset .json shipped")
+    if data:
+        fail("wheel",
+             f"Pulsar ships no default profiles, but the wheel contains "
+             f"preset data: {data}")
     else:
-        print("  preset data:", data)
+        print("  no preset data: the wheel ships no default profiles")
 
 
 def check_install(wheel):
@@ -104,20 +106,20 @@ def check_install(wheel):
     if r.returncode != 0:
         fail("entry point", (r.stderr or "").strip()[-400:])
 
-    step("4. built-in profiles load from the installed package")
+    step("4. installed package starts with no default profiles")
     r = subprocess.run(
         [f"{venv}/bin/python", "-c",
          "import tempfile\n"
          "from pulsar.utils.profile_manager import ProfileManager\n"
          "pm = ProfileManager(presets_dir=tempfile.mkdtemp())\n"
-         "n = len(pm._load_builtin())\n"
-         "assert n > 0, 'installed package loaded ZERO built-in profiles'\n"
-         "print(f'built-in profiles load from installed wheel: {n}')"],
+         "names = pm.get_profile_names()\n"
+         "assert not names, f'installed package ships default profiles: {names}'\n"
+         "print('installed package starts with no default profiles: OK')"],
         cwd="/tmp", capture_output=True, text=True,
     )
     print("  " + (r.stdout or "").strip())
     if r.returncode != 0:
-        fail("preset data", (r.stderr or "").strip()[-400:])
+        fail("profile list", (r.stderr or "").strip()[-400:])
 
     step("5. no stale pre-move imports in ci.yml")
     stale = set()
@@ -140,14 +142,14 @@ def check_install(wheel):
     else:
         print("  none -- every import is namespaced under pulsar")
 
-    step("6. bundled preset JSON parses")
-    for path in sorted(Path("src/pulsar/utils/presets").glob("*.json")):
-        try:
-            import json
-            json.loads(path.read_text())
-            print(f"  valid: {path}")
-        except ValueError as exc:
-            fail("preset json", f"{path}: {exc}")
+    step("6. no bundled preset JSON remains")
+    leftover = sorted(Path("src/pulsar/utils/presets").glob("*.json"))
+    if leftover:
+        fail("preset json",
+             f"Pulsar ships no default profiles, but these are still "
+             f"bundled: {[str(p) for p in leftover]}")
+    else:
+        print("  none -- the package ships no default profiles")
 
 
 def main():

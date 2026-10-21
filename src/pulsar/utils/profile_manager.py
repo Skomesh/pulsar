@@ -51,7 +51,6 @@ For details on why this schema looks the way it does, see
 ``docs/PHASE3_INTROSPECTION_REPORT.md``.
 """
 
-import json
 import os
 import re
 import shlex
@@ -198,6 +197,7 @@ class ProfileManager:
         if not ProfileManager._looks_like_v1(raw):
             # Already v2 — pass through, but make sure schema_version is set.
             out = dict(raw)
+            out.pop("builtin", None)
             out.setdefault("schema_version", CURRENT_SCHEMA_VERSION)
             return out
 
@@ -214,58 +214,16 @@ class ProfileManager:
             "routing": [],
         }
 
-    def _load_builtin(self) -> Dict[str, Any]:
-        """Load the bundled builtin_profiles.json from the package's presets/ dir.
-
-        Returns {} if the file doesn't exist or fails to parse. Built-in
-        profiles are always available and can be overridden by user profiles
-        of the same name.
-        """
-        # Resolve relative to THIS FILE, one level up: the data is shipped
-        # inside the package (src/pulsar/utils/presets/), so the path is identical
-        # in a source checkout and in site-packages after a wheel install.
-        #
-        # The previous code walked two levels up to the project root, which
-        # does not exist in an installed wheel -- so an installed Pulsar
-        # silently loaded zero built-in profiles.
-        builtin_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "presets",
-            "builtin_profiles.json",
-        )
-        if not os.path.exists(builtin_path):
-            return {}
-        try:
-            with open(builtin_path) as f:
-                return json.load(f)
-        except (OSError, json.JSONDecodeError):
-            return {}
-
     def load_all_profiles(self) -> Dict[str, Dict[str, Any]]:
-        """Load user profiles with built-in profiles as a fallback layer.
+        """Load the profiles the user saved, migrating v1 entries to v2.
 
-        User profiles override built-ins of the same name. The returned dict
-        is for read-only use (apply / inspect). To write, use save_profile
-        which goes through load_user_profiles to keep built-ins out of disk.
+        This is the whole list. Pulsar ships no default profiles, so
+        nothing is merged in underneath the user's own entries.
         """
-        user = self._load_user_profiles_dict()
-        builtin = self._load_builtin()
-        # Built-ins first, then user overrides
-        merged: Dict[str, Dict[str, Any]] = dict(builtin)
-        merged.update(user)
-        migrated: Dict[str, Dict[str, Any]] = {}
-        for name, entry in merged.items():
-            if not isinstance(entry, dict):
-                continue
-            migrated[name] = self.migrate_entry(name, entry)
-        return migrated
+        return self._load_profiles_dict()
 
-    def load_user_profiles_dict(self) -> Dict[str, Dict[str, Any]]:
-        """Load only the user-saved profiles (no built-ins). Use this for writes."""
-        return self._load_user_profiles_dict()
-
-    def _load_user_profiles_dict(self) -> Dict[str, Dict[str, Any]]:
-        """Internal: read user_presets.json and migrate."""
+    def _load_profiles_dict(self) -> Dict[str, Dict[str, Any]]:
+        """Internal: read the profile file and migrate every entry."""
         raw = self._load_raw()
         migrated: Dict[str, Dict[str, Any]] = {}
         for name, entry in raw.items():
@@ -273,32 +231,6 @@ class ProfileManager:
                 continue
             migrated[name] = self.migrate_entry(name, entry)
         return migrated
-
-    def is_builtin_name(self, name: str) -> bool:
-        """True if a profile with this name is bundled as a built-in.
-
-        The profile may or may not be currently shadowed by a user profile
-        of the same name. Use is_shadowed_by_user(name) to check whether
-        the user is currently overriding the built-in.
-        """
-        return name in self._load_builtin()
-
-    def is_shadowed_by_user(self, name: str) -> bool:
-        """True if a user-saved profile of this name currently overrides a built-in.
-
-        Returns False if the name isn't a built-in, or if the user hasn't
-        saved a profile with this name.
-        """
-        return name in self._load_user_profiles_dict()
-
-    def is_builtin(self, name: str) -> bool:
-        """True if `name` is a built-in profile (not user-saved).
-
-        DEPRECATED: ambiguous. Use is_builtin_name + is_shadowed_by_user
-        if you need to distinguish "is the name in builtins?" from
-        "is the user currently seeing the built-in version?".
-        """
-        return self.is_builtin_name(name)
 
     def get_profile(self, name: str) -> Optional[Dict[str, Any]]:
         profiles = self.load_all_profiles()
@@ -321,15 +253,13 @@ class ProfileManager:
         to_save.setdefault("schema_version", CURRENT_SCHEMA_VERSION)
         to_save.setdefault("created", datetime.now(timezone.utc).isoformat())
 
-        # Load USER profiles only — built-ins should never end up in
-        # user_presets.json. Saving with the same name as a built-in
-        # shadows it (built-in is loaded as a fallback layer).
-        all_profiles = self._load_user_profiles_dict()
+        # Read the existing profiles, replace/insert this one, write back.
+        all_profiles = self._load_profiles_dict()
         all_profiles[name] = to_save
         return self._save_raw(all_profiles)
 
     def delete_profile(self, name: str) -> bool:
-        profiles = self._load_user_profiles_dict()
+        profiles = self._load_profiles_dict()
         if name not in profiles:
             return False
         del profiles[name]

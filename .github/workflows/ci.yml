@@ -203,11 +203,10 @@ jobs:
           print('both console entry points importable: OK')
           "
 
-      - name: Verify installed package loads its preset data
-        # Stronger than inspecting the zip: proves the installed package can
-        # actually READ the data it shipped. A wheel can contain the file and
-        # still resolve it to the wrong path, which is exactly what
-        # _load_builtin used to do.
+      - name: Verify installed package starts with no default profiles
+        # The profile list is only what the user saved. A fresh install
+        # must therefore be EMPTY -- if this ever fails, something is
+        # shipping default profiles again.
         run: |
           set -euo pipefail
           cd /tmp
@@ -215,9 +214,9 @@ jobs:
           import tempfile
           from pulsar.utils.profile_manager import ProfileManager
           pm = ProfileManager(presets_dir=tempfile.mkdtemp())
-          n = len(pm._load_builtin())
-          assert n > 0, 'installed package loaded ZERO built-in profiles'
-          print(f'built-in profiles load from installed wheel: {n}')
+          names = pm.get_profile_names()
+          assert not names, f'installed package ships default profiles: {names}'
+          print('installed package starts with no default profiles: OK')
           "
 
       - name: Check packaging metadata agrees across formats
@@ -246,15 +245,3 @@ jobs:
           else
             echo "No tests found in tests/, skipping pytest"
           fi
-
-      - name: Validate bundled preset JSON
-        # builtin_profiles.json ships in the package and is parsed at
-        # startup, so a syntax error there breaks every launch. This used
-        # to point at presets/user_presets.json, which is per-user runtime
-        # data and no longer tracked -- the check was dead code.
-        run: |
-          set -euo pipefail
-          for f in src/pulsar/utils/presets/*.json; do
-            python3 -c "import json,sys; json.load(open('$f'))"
-            echo "valid: $f"
-          done

@@ -101,10 +101,8 @@ override_dh_auto_install:
 	# resolves to $XDG_DATA_HOME/pulsar/presets, i.e. ~/.local/share on a
 	# default install -- see src/pulsar/utils/paths.py. Installing a presets
 	# directory into /usr would give the package a path the application never
-	# reads, and would tempt someone into making it writable, which would
-	# then break every future release's ability to ship new built-in presets.
-	# The built-in profiles ship inside the wheel as package data
-	# (pulsar/utils/presets/builtin_profiles.json) and are read-only.
+	# reads. The package ships no data files at all: the profile list is
+	# only what the user saved.
 	# NOT `> debian/pulsar/usr/share/applications/pulsar.desktop`: nothing
 	# creates that directory. There is no debian/pulsar.install or .dirs,
 	# and the wheel ships no desktop file, so dh_python3 never makes it.

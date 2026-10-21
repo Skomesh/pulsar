@@ -256,8 +256,6 @@ def simulate_flatpak(rel, label):
         # source tree copied
         check((dest / "pulsar" / "__main__.py").is_file(),
               "app package copied to /app/pulsar")
-        check((dest / "pulsar" / "utils" / "presets" / "builtin_profiles.json").is_file(),
-              "builtin_profiles.json shipped next to the code (package-data)")
         check((dest / "pulsar" / "ui" / "main_window.py").is_file(),
               "subpackage ui copied")
         check((dest / "pulsar" / "config" / "__init__.py").is_file(),

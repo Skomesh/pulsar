@@ -183,9 +183,8 @@ modules:
     build-commands:
       # pyproject.toml declares `dependencies = []`. There is no pip install to
       # do: the package is pure stdlib + tkinter and is run from source inside
-      # /app. Copying the tree keeps builtin_profiles.json (package-data,
-      # declared in pyproject.toml) next to the code that reads it, which is
-      # what utils/profile_manager.py expects.
+      # /app. Copying the tree is all that is needed -- the package ships no
+      # data files, so there is nothing to place next to the code.
       - install -d /app/pulsar
       - cp -r src/pulsar/. /app/pulsar/
       - install -d /app/bin

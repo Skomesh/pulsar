@@ -52,12 +52,10 @@ Source = "https://github.com/Skomesh/pulsar"
 where = ["src"]
 include = ["pulsar*"]
 
-[tool.setuptools.package-data]
-# builtin_profiles.json is read at runtime by utils/profile_manager.py.
-# Without this the wheel ships no preset data and the app silently starts
-# with an empty profile list. Data lives in the package dir so it resolves
-# from an installed wheel, not just a source checkout.
-"pulsar.utils" = ["presets/*.json"]
+# Pulsar ships no package data. It used to declare
+# "pulsar.utils" = ["presets/*.json"] to ship builtin_profiles.json, the
+# three built-in routing profiles. Those are gone: the profile list is
+# only what the user saved, so there is nothing to install.
 
 [tool.ruff]
 line-length = 100

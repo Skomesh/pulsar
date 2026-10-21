@@ -234,14 +234,13 @@ class MainWindow:
             command=self.on_device_type_changed,
         ).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=2)
 
-        # Add format example label
-        self.command_format_label = ttk.Label(
-            frame,
-            text="Format: pactl load-module module-null-sink media.class=Audio/Duplex sink_name=<name> channels=<channels>",
-            font=("", 9, "italic"),
-            foreground="gray"
-        )
-        self.command_format_label.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(0, 10))
+        # The old static "Format: pactl load-module module-null-sink ..."
+        # hint used to sit here. It restated what the live Command Preview
+        # below already shows, and users read it as something to type. The
+        # widget is still created (empty, ungridded) because
+        # on_device_type_changed() writes device-type text into it and
+        # would raise AttributeError without it.
+        self.command_format_label = ttk.Label(frame, text="")
 
         # Basic Options Section
         basic_frame = ttk.LabelFrame(frame, text="Basic Options", padding="10")
@@ -631,13 +630,11 @@ class MainWindow:
         properties_entry = ttk.Entry(self.advanced_frame, textvariable=self.properties_var, width=30)
         properties_entry.grid(row=5, column=1, sticky=(tk.W, tk.E), padx=5, pady=5)
 
-        # Properties help label
-        ttk.Label(
-            self.advanced_frame,
-            text="e.g., device.description='My Custom Sink'",
-            font=("", 8, "italic"),
-            foreground="gray"
-        ).grid(row=6, column=1, sticky=tk.W, padx=5, pady=(0, 5))
+        # The gray "e.g., device.description='My Custom Sink'" hint that
+        # used to sit under this entry is gone. It was a second static
+        # snippet of pactl syntax to read alongside the live Command
+        # Preview, which already renders sink_properties=... from
+        # whatever is typed here.
 
         # Loopback Latency — affects any future loopback created from
         # this sink. Too low = robotic/crackly audio (buffer underrun).

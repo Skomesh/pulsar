@@ -2318,6 +2318,29 @@ class MainWindow:
         else:  # "both"
             return self._create_device_of_type("both")
 
+    def _explicit_rate(self):
+        """The sample rate to send, or None when the user has not chosen one.
+
+        The old test was `rate != "44100"`, meaning "44100 is the default,
+        so don't send it". That was true when the form hardcoded 44100 and
+        stopped being true the moment the default became the rate the
+        default sink actually runs at. Two files ended up with different
+        ideas of what 'default' meant.
+
+        The question now is simply whether the user touched the control,
+        which `_rate_user_set` tracks from the combobox's own bindings --
+        programmatic writes from preset handling do not set it.
+        """
+        if not getattr(self, "_rate_user_set", False):
+            return None
+        rate = self.rate_var.get().strip()
+        if not rate:
+            return None
+        try:
+            return int(rate)
+        except ValueError:
+            return None
+
     def _create_device_of_type(self, device_type):
         """Shared logic: gather inputs from the form, call the right PactlRunner method."""
         raw_name = self.sink_name_var.get().strip()
@@ -2374,13 +2397,14 @@ class MainWindow:
 
         advanced_options = {}
         if hasattr(self, "show_advanced_var") and self.show_advanced_var.get():
-            rate = self.rate_var.get().strip()
-            if rate and rate != "44100":
-                try:
-                    advanced_options["rate"] = int(rate)
-                except ValueError:
-                    messagebox.showerror("Error", f"Invalid sample rate: {rate}")
-                    return
+            rate = self._explicit_rate()
+            if rate is not None:
+                advanced_options["rate"] = rate
+            elif self._rate_user_set and self.rate_var.get().strip():
+                messagebox.showerror(
+                    "Error",
+                    f"Invalid sample rate: {self.rate_var.get().strip()}")
+                return
             format_desc = self.format_var.get().strip()
             if format_desc and hasattr(self, "format_mappings"):
                 actual_format = self.format_mappings.get(format_desc, format_desc)
@@ -4276,8 +4300,8 @@ class MainWindow:
         # Add advanced options if they are set and advanced options are shown
         if hasattr(self, 'show_advanced_var') and self.show_advanced_var.get():
             # Sample rate
-            rate = self.rate_var.get().strip()
-            if rate and rate != "44100":  # Only add if different from default
+            rate = self._explicit_rate()
+            if rate is not None:
                 cmd_parts.append(f"rate={rate}")
 
             # Sample format - get the actual format code from the description
@@ -4749,9 +4773,12 @@ class MainWindow:
 
         # Add advanced options if they are set
         if hasattr(self, 'show_advanced_var') and self.show_advanced_var.get():
-            rate = self.rate_var.get().strip()
-            if rate and rate != "44100":
-                preset_data["rate"] = rate
+            rate = self._explicit_rate()
+            if rate is not None:
+                # Stored as a string: it is read back from the combobox,
+                # which holds strings, and round-tripping it through an
+                # int would change the preset file's shape.
+                preset_data["rate"] = str(rate)
 
             format_desc = self.format_var.get().strip()
             if format_desc and hasattr(self, 'format_mappings'):

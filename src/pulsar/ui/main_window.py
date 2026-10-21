@@ -657,6 +657,36 @@ class MainWindow:
         # provides the scrollbar.
         frame = self._setup_scrollable_tab(self.manage_tab, padding="10")
 
+        # --- Where is my data? --------------------------------------------
+        # The user asked "unsure where the profiles are saved" -- the
+        # Profiles tab lists profiles but never says where they live, so
+        # there was no way to find or back the directory up.
+        #
+        # Read-only, not disabled: a disabled ttk.Entry cannot be selected
+        # or copied, which defeats the purpose. `state="readonly"` still
+        # gives the user normal text selection and Ctrl+C.
+        data_path_frame = ttk.LabelFrame(
+            frame, text="Your Data", padding="10"
+        )
+        data_path_frame.pack(fill=tk.X, padx=0, pady=(0, 10))
+        ttk.Label(
+            data_path_frame,
+            text="Profiles and presets are saved here (Ctrl+C to copy):",
+            font=("", 9),
+        ).pack(anchor=tk.W, pady=(0, 3))
+        from pulsar.utils.paths import user_presets_dir
+
+        # Resolved, not hard-coded to "~/.local/share" -- the whole point
+        # is that this is the directory the app actually writes to.
+        self.data_path_var = tk.StringVar(value=str(user_presets_dir()))
+        self.data_path_entry = ttk.Entry(
+            data_path_frame,
+            textvariable=self.data_path_var,
+            state="readonly",
+            width=60,
+        )
+        self.data_path_entry.pack(fill=tk.X)
+
         # --- Quick Routing Panel (always visible) ---
         # Prominent, prominent panel at the TOP so users immediately
         # see how to route a selected virtual sink to hardware outputs.
@@ -812,11 +842,31 @@ class MainWindow:
         # and unreachable. No test caught it because test_tab_refresh.py
         # drives handlers on object.__new__(MainWindow), where no widget is
         # ever packed and display is unobservable.
+        #
+        # ON REDUNDANCY (user: "Is multi routing able to replace the standard
+        # routing panel? It sounds like it's just a more featureful version."):
+        # functionally, YES -- apply_multi_routing is a strict superset of
+        # apply_routing. One checked target makes the two bodies collapse to
+        # the same end state, except multi is idempotent and will not tear
+        # down a route the user did not ask to change. See
+        # tests/test_manage_tab.py::TestMultiRoutingSubsumesSingleOutput, which
+        # proves it executably.
+        #
+        # The single-output widgets are nevertheless still here, because they
+        # are NOT owned by this function alone: update_routing_panel reads
+        # routing_status_var, routing_output_combo, route_button and
+        # stop_route_button, and apply_routing reads routing_output_var.
+        # Deleting them from here would raise AttributeError inside those
+        # functions on every tree selection. The removal needs to be done in
+        # one piece alongside update_routing_panel; it is not a Manage-tab-
+        # local change.
         self.routing_frame = ttk.LabelFrame(frame, text="Routing")
         self.routing_frame.pack(fill=tk.X, pady=5)  # matches button_frame
         self.routing_frame.columnconfigure(1, weight=1)
 
         # --- Single-output routing (legacy dropdown) -------------------
+        # Redundant with the Multi-output Routing panel below; kept only
+        # because update_routing_panel and apply_routing still drive it.
         # Status line
         self.routing_status_var = tk.StringVar(value="Select a virtual sink to route")
         ttk.Label(

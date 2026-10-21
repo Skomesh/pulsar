@@ -430,14 +430,19 @@ class MainWindow:
             row=2, column=0, sticky=tk.W, pady=5
         )
         self.channels_var = tk.StringVar(value="2")
-        channels_combo = ttk.Combobox(
+        # Editable: PulseAudio accepts any positive channel count
+        # (`channels=16` loads and reports 'float32le 16ch 48000Hz'), so
+        # the old 1/2/4/6/8-only list was an artificial ceiling. The old
+        # values stay as dropdown suggestions.
+        self.channels_combo = ttk.Combobox(
             self.advanced_frame,
             textvariable=self.channels_var,
             values=("1", "2", "4", "6", "8"),
-            width=10
+            width=10,
+            state="normal",
         )
-        channels_combo.grid(row=2, column=1, sticky=tk.W, padx=5, pady=5)
-        channels_combo.current(1)  # Default to stereo (2 channels)
+        self.channels_combo.grid(row=2, column=1, sticky=tk.W, padx=5, pady=5)
+        self.channels_combo.current(1)  # Default to stereo (2 channels)
 
         # Channel Map
         # Channel Map — preset dropdown + custom entry. The map tells
@@ -516,6 +521,12 @@ class MainWindow:
             }
             default_map = defaults.get(ch)
             if not default_map:
+                # No preset layout for this count (e.g. 16). Leaving the
+                # previous 2-entry map in place would make pactl reject the
+                # module — a channel map whose length doesn't match the
+                # channel count is an error. An empty map means "PulseAudio
+                # picks from the channel count", which is what we want.
+                self.channel_map_var.set("")
                 return
             # Find a matching preset by map string
             for label, layout in self.channel_map_presets:

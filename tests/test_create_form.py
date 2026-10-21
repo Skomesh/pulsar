@@ -148,7 +148,7 @@ class TestChannelsAcceptAnyCount(unittest.TestCase):
         )
 
     def test_the_old_suggestions_are_still_offered(self):
-        values = tuple(str(v) for v in self.app.channels_combo.cget("values"))
+        values = tuple(str(v) for v in self.app.channels_combo["values"])
         for expected in ("1", "2", "4", "6", "8"):
             self.assertIn(expected, values)
 

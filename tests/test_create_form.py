@@ -22,7 +22,6 @@ Three user-reported defects are covered:
 """
 
 import os
-import shutil
 import tkinter as tk
 import unittest
 from unittest import mock

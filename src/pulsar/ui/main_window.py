@@ -1256,13 +1256,12 @@ class MainWindow:
         self._profile_display_names = []  # index -> label
         self._profile_actual_names = []   # index -> real name
         for n in sorted(names):
-            if self.profile_manager.is_builtin_name(n):
-                shadowed = self.profile_manager.is_shadowed_by_user(n)
-                label = f"{n}  (built-in, your edits)" if shadowed else f"{n}  (built-in)"
-            else:
-                label = n
-            self.profile_listbox.insert(tk.END, label)
-            self._profile_display_names.append(label)
+            # Every listed profile is user-owned. The built-in/shadowed
+            # distinction went away with the shipped profiles, and leaving
+            # the calls in meant MainWindow() raised AttributeError on
+            # startup -- the app would not open at all.
+            self.profile_listbox.insert(tk.END, n)
+            self._profile_display_names.append(n)
             self._profile_actual_names.append(n)
         self._set_profile_details_text(
             "Select a profile to see its details.\n\n"
@@ -1440,18 +1439,10 @@ class MainWindow:
         if not name:
             messagebox.showinfo("Delete Profile", "Please select a profile first.")
             return
-        # If this name is a built-in AND the user hasn't shadowed it,
-        # there is nothing to delete (the data lives in builtin_profiles.json).
-        if self.profile_manager.is_builtin_name(name) and \
-                not self.profile_manager.is_shadowed_by_user(name):
-            messagebox.showinfo(
-                "Delete Profile",
-                f"'{name}' is a built-in profile and cannot be deleted.\n\n"
-                "If you want to remove it from your list, you can shadow it "
-                "with your own version using 'Save Current State' (using the "
-                "same name), then delete the shadow.",
-            )
-            return
+        # No built-in guard: there are no built-ins left. Every profile in
+        # the list came from the user's own file and is theirs to delete. The
+        # old guard raised AttributeError here, on top of the one in
+        # refresh_profile_list that stopped the app launching.
         if not messagebox.askyesno(
             "Delete Profile",
             f"Delete profile '{name}'?\n\n"

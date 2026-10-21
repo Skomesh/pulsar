@@ -32,7 +32,6 @@ from unittest import mock
 
 from pulsar.ui.main_window import MainWindow
 
-
 # ----------------------------------------------------------------------
 # 1. Does multi-output routing subsume the single-output panel?
 # ----------------------------------------------------------------------

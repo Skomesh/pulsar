@@ -62,6 +62,7 @@ from pulsar.utils.pactl_runner import LoopbackCycleError, PactlRunner
 from pulsar.utils.paths import (
     legacy_presets_dir,
     looks_like_profile_entry,
+    quarantine_unreadable,
     read_json_dict,
     take_legacy_section,
     user_presets_dir,
@@ -155,7 +156,9 @@ class ProfileManager:
         and raise AttributeError out of load_all_profiles, which the GUI
         calls during startup -- so the window would not open at all.
         """
-        return read_json_dict(self.presets_file)
+        data, self._load_error = read_json_dict(self.presets_file,
+                                                   label="profiles")
+        return data
 
     def _save_raw(self, data: Dict[str, Any]) -> bool:
         """Write the profile file atomically.
@@ -163,7 +166,14 @@ class ProfileManager:
         The old contents survive a failed write intact. open(..., 'w')
         truncates before json.dump runs, so a disk-full turned one failed
         save into the loss of every profile the user had.
+
+        A file we could not READ is moved aside rather than overwritten --
+        see the same note in PresetManager._save_user_presets.
         """
+        if getattr(self, "_load_error", None):
+            if not quarantine_unreadable(self.presets_file):
+                return False
+            self._load_error = None
         return write_json_atomic(self.presets_file, data)
 
     # ------------------------------------------------------------------

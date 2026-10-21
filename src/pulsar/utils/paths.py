@@ -12,8 +12,9 @@ a read-only bundle.
 
 import json
 import os
+import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 #: Fallback when $XDG_DATA_HOME is unset, per the XDG Base Directory spec.
 XDG_DATA_HOME_FALLBACK = "~/.local/share"
@@ -128,7 +129,7 @@ def write_json_atomic(path, data, indent=2) -> bool:
         return False
 
 
-def read_json_dict(path) -> Dict[str, Any]:
+def read_json_dict(path, label: str = "") -> Tuple[Dict[str, Any], Optional[str]]:
     """Load JSON, returning {} for anything unusable.
 
     Returns {} rather than raising when the file is missing, unreadable,
@@ -137,15 +138,56 @@ def read_json_dict(path) -> Dict[str, Any]:
     merge this into their data, and a list would propagate an
     ``AttributeError`` on ``.update()`` straight into the GUI -- in one
     case far enough to stop the window opening at all.
+
+    A MISSING file is normal on first run and says nothing. A file that
+    EXISTS but cannot be read is the user's data being broken, and that is
+    reported loudly -- with the full path, because "your presets are gone"
+    is not actionable and "/home/you/.local/share/pulsar/presets/
+    audio_presets.json is corrupt" is.
+
+    Returns ({}, None) on success or when absent; ({}, reason) when a file
+    was found but could not be used. The second element is what lets a
+    caller refuse to write over data it never managed to read.
     """
+    if not os.path.exists(path):
+        return {}, None
     try:
         with open(path) as handle:
             data = json.load(handle)
-    except (OSError, json.JSONDecodeError):
-        return {}
+    except (OSError, json.JSONDecodeError) as exc:
+        reason = str(exc)
+        where = f" for {label}" if label else ""
+        print(f"WARNING: could not read {path}{where}: {reason}")
+        print("         Your data is still on disk but will not be listed. "
+              "Fix or move that file, then restart.")
+        return {}, reason
     if not isinstance(data, dict):
-        return {}
-    return data
+        reason = "top level is not a JSON object"
+        where = f" for {label}" if label else ""
+        print(f"WARNING: {path}{where}: {reason}.")
+        print("         Your data is still on disk but will not be listed.")
+        return {}, reason
+    return data, None
+
+
+def quarantine_unreadable(path) -> str:
+    """Move an unreadable data file aside and return its new path.
+
+    Used so the next save starts clean instead of overwriting the only
+    copy of something the app could not read. Nothing is deleted: the
+    bytes stay on disk under a name that sorts next to the original, so
+    the user can repair or inspect them.
+    """
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    aside = f"{path}.corrupt-{stamp}"
+    try:
+        os.replace(path, aside)
+        print(f"         Moved it to {aside} so it is not overwritten.")
+        return aside
+    except OSError as exc:
+        print(f"         Could not move it aside ({exc}); "
+              f"saving will be refused to avoid destroying it.")
+        return ""
 
 
 def looks_like_profile_entry(_name, entry) -> bool:

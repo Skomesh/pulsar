@@ -342,15 +342,55 @@ class MainWindow:
         ttk.Label(self.advanced_frame, text="Sample Rate (Hz):").grid(
             row=0, column=0, sticky=tk.W, pady=5
         )
-        self.rate_var = tk.StringVar(value="44100")
-        rate_combo = ttk.Combobox(
+        def _detect_default_sink_rate(default=48000):
+            """Return the sample rate of the DEFAULT sink, in Hz.
+
+            The form used to hardcode 44100, so on a machine whose hardware
+            runs at 48k every sink the app created was resampled on the way
+            to the speakers. `pactl list sinks` reports each sink's spec as
+            e.g. "float32le 2ch 48000Hz"; we read the Hz off the default
+            sink so new devices match the hardware.
+
+            Falls back to 48000 when there is no default sink, the server
+            can't be queried, or the spec has no Hz in it.
+            """
+            try:
+                default_sink = PactlRunner.get_default_sink()
+            except Exception:
+                return default
+            if not default_sink:
+                return default
+            try:
+                sinks = PactlRunner.list_sinks()
+            except Exception:
+                return default
+            for sink in sinks or []:
+                if sink.get("name") != default_sink:
+                    continue
+                match = re.search(r"(\d+)\s*Hz", str(sink.get("sample_spec") or ""))
+                if match:
+                    return int(match.group(1))
+                return default
+            return default
+
+        detected_rate = str(_detect_default_sink_rate())
+        self.rate_var = tk.StringVar(value=detected_rate)
+        rate_choices = ["8000", "16000", "22050", "44100",
+                        "48000", "88200", "96000", "192000"]
+        if detected_rate not in rate_choices:
+            # Hardware at an unusual rate (11025, 176400, ...) still has to
+            # be selectable, and a combobox whose selection isn't in its
+            # own value list reads as broken.
+            rate_choices.append(detected_rate)
+            rate_choices.sort(key=int)
+        self.rate_combo = ttk.Combobox(
             self.advanced_frame,
             textvariable=self.rate_var,
-            values=("8000", "16000", "22050", "44100", "48000", "88200", "96000", "192000"),
+            values=tuple(rate_choices),
             width=15
         )
-        rate_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=5)
-        rate_combo.current(3)  # Default to 44100
+        self.rate_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=5)
+        self.rate_combo.current(rate_choices.index(detected_rate))
 
         # Sample Format (with descriptive labels)
         ttk.Label(self.advanced_frame, text="Sample Format:").grid(
@@ -647,6 +687,15 @@ class MainWindow:
 
         # Initialize preset values AFTER all UI elements are created
         self.on_audio_preset_selected(None)
+
+        # Applying a preset resets the sample rate to a hardcoded 44100
+        # whenever that preset carries no "rate" of its own, which undoes
+        # the detected default above. Put the hardware's rate back unless
+        # the preset really specifies one.
+        _preset = self.preset_manager.get_preset(self.audio_preset_var.get()) or {}
+        if "rate" not in _preset:
+            self.rate_var.set(detected_rate)
+        self.update_command_preview()
 
     def setup_manage_tab(self):
         """Set up the Manage tab content with simplified category-based view."""

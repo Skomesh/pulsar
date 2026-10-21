@@ -126,6 +126,20 @@ class TestSampleRateDefault(unittest.TestCase):
         self.addCleanup(root.destroy)
         self.assertEqual(app.rate_var.get(), "48000")
 
+    def test_survives_a_preset_being_reapplied(self):
+        """`refresh_create_tab_state` re-applies the preset on every tab
+        entry, which used to drag the rate back to 44100."""
+        self.app.refresh_create_tab_state()
+        self.root.update_idletasks()
+        self.assertEqual(self.app.rate_var.get(), "48000")
+
+    def test_a_rate_the_user_picks_is_not_overridden(self):
+        self.app._rate_user_set = True
+        self.app.rate_var.set("44100")
+        self.app.refresh_create_tab_state()
+        self.root.update_idletasks()
+        self.assertEqual(self.app.rate_var.get(), "44100")
+
     def test_the_default_rate_is_reachable_in_the_dropdown(self):
         """A combobox whose selection isn't in its list looks broken."""
         values = tuple(str(v) for v in self.app.rate_combo["values"])

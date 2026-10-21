@@ -263,6 +263,60 @@ class MainWindow:
         # Track if user has manually entered a name
         self.user_has_custom_name = False
 
+        # The field starts EMPTY. It used to be pre-filled with e.g.
+        # "stereo (auto)", which meant typing a new name required erasing
+        # the old one first. Several handlers outside this function still
+        # write an auto-name in (on_audio_preset_selected,
+        # refresh_create_tab_state), so this trace is the single choke
+        # point: any value still wearing the " (auto)" suffix is dropped
+        # and the field goes back to blank. A name the user typed never
+        # carries that suffix, so it is left alone. Auto-naming still
+        # happens at create time when the field is empty.
+        def _track_name_field(*_args):
+            """Single choke point for the name field.
+
+            Two things happen here. First, any value still wearing the
+            " (auto)" suffix is dropped and the field goes back to blank:
+            on_audio_preset_selected and refresh_create_tab_state both
+            write an auto-name in, and the user reported having to erase
+            it before typing. Second, user_has_custom_name is kept in sync
+            with what is actually in the field — those handlers overwrite
+            any name whose flag is False, so a name the user typed would
+            otherwise be destroyed by the next preset change. A real name
+            never carries the suffix, so it is left untouched, and
+            auto-naming still happens at create time when the field is
+            empty.
+            """
+            value = self.sink_name_var.get()
+            if value.endswith(" (auto)"):
+                self.sink_name_var.set("")
+                self.sink_name_entry.config(foreground="black")
+            else:
+                self.user_has_custom_name = bool(value.strip())
+
+        self.sink_name_var.trace_add("write", _track_name_field)
+
+        # Placeholder hint. ttk has no native placeholder, so it is a
+        # separate gray label beside the entry rather than text sitting in
+        # the field that the user would have to delete. It is hidden as
+        # soon as a real name is typed.
+        self.sink_name_placeholder = ttk.Label(
+            basic_frame,
+            text="(blank — a name is chosen automatically)",
+            font=("", 8, "italic"),
+            foreground="gray",
+        )
+        self.sink_name_placeholder.grid(row=0, column=2, sticky=tk.W,
+                                        padx=(5, 0), pady=5)
+
+        def _toggle_name_placeholder(*_args):
+            if self.sink_name_var.get().strip():
+                self.sink_name_placeholder.grid_remove()
+            else:
+                self.sink_name_placeholder.grid()
+
+        self.sink_name_var.trace_add("write", _toggle_name_placeholder)
+
         # Sink description - kept for backward compatibility but less emphasized
         ttk.Label(basic_frame, text="Description (optional):").grid(
             row=1, column=0, sticky=tk.W, pady=5
@@ -391,6 +445,36 @@ class MainWindow:
         )
         self.rate_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=5)
         self.rate_combo.current(rate_choices.index(detected_rate))
+
+        # Applying a preset hard-resets the rate to 44100 whenever the
+        # preset has no "rate" of its own. That happens on every preset
+        # change AND on every return to the Create tab
+        # (refresh_create_tab_state -> on_audio_preset_selected), so a
+        # one-shot fixup after setup would be undone again. Instead the
+        # detected default is enforced here, on every write, until the
+        # user picks a rate themselves. _rate_user_set is flipped by the
+        # bindings below, which fire only for direct interaction with the
+        # rate widget — programmatic writes never set it.
+        self._rate_user_set = False
+        self._rate_fixup_running = False
+
+        def _restore_detected_rate(*_args):
+            if self._rate_user_set or self._rate_fixup_running:
+                return
+            if self.rate_var.get() == "44100" and detected_rate != "44100":
+                self._rate_fixup_running = True
+                try:
+                    self.rate_var.set(detected_rate)
+                finally:
+                    self._rate_fixup_running = False
+
+        self.rate_var.trace_add("write", _restore_detected_rate)
+
+        def _mark_rate_user_set(*_args):
+            self._rate_user_set = True
+
+        self.rate_combo.bind("<<ComboboxSelected>>", _mark_rate_user_set)
+        self.rate_combo.bind("<KeyRelease>", _mark_rate_user_set)
 
         # Sample Format (with descriptive labels)
         ttk.Label(self.advanced_frame, text="Sample Format:").grid(
@@ -697,15 +781,9 @@ class MainWindow:
         frame.columnconfigure(1, weight=1)
 
         # Initialize preset values AFTER all UI elements are created
+        # (on_audio_preset_selected hard-sets 44100; the trace registered
+        # above puts the detected hardware rate straight back.)
         self.on_audio_preset_selected(None)
-
-        # Applying a preset resets the sample rate to a hardcoded 44100
-        # whenever that preset carries no "rate" of its own, which undoes
-        # the detected default above. Put the hardware's rate back unless
-        # the preset really specifies one.
-        _preset = self.preset_manager.get_preset(self.audio_preset_var.get()) or {}
-        if "rate" not in _preset:
-            self.rate_var.set(detected_rate)
         self.update_command_preview()
 
     def setup_manage_tab(self):

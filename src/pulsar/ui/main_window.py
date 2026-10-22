@@ -814,11 +814,46 @@ class MainWindow:
         # Resolved, not hard-coded to "~/.local/share" -- the whole point
         # is that this is the directory the app actually writes to.
         self.data_path_var = tk.StringVar(value=str(user_presets_dir()))
+
+        # Styled to look like plain text, not a form field.
+        #
+        # The user reported that a readonly-but-boxed Entry gives the
+        # impression there is some way to edit it. Readonly Entry still
+        # renders the sunken border and field background, so "readonly"
+        # is invisible -- the only signal was that clicking did nothing.
+        #
+        # Flattening the border and the field background removes that
+        # signal while keeping everything that matters: the text is still
+        # selected with the mouse, still takes Ctrl+C, and still scrolls
+        # the selection into view. A disabled widget would lose exactly
+        # that, which is why this is readonly rather than disabled.
+        #
+        # The colour has to be the frame's own background, or the field
+        # shows as a lighter rectangle against the panel. Looked up from
+        # the live widget rather than hard-coded to a colour that is
+        # right on this theme and wrong on the next one.
+        try:
+            path_bg = ttk.Style().lookup("TLabelframe.Label", "background")
+            if not path_bg:
+                path_bg = data_path_frame.cget("background")
+        except Exception:  # pragma: no cover - theme without the option
+            path_bg = ""
+        # ttk widgets take border and relief from the style, not from the
+        # constructor -- passing them to ttk.Entry() is a TypeError.
+        ttk.Style().configure(
+            "PathDisplay.TEntry",
+            borderwidth=0,
+            relief="flat",
+            padding=1,
+            **({"fieldbackground": path_bg} if path_bg else {}),
+        )
+
         self.data_path_entry = ttk.Entry(
             data_path_frame,
             textvariable=self.data_path_var,
             state="readonly",
             width=60,
+            style="PathDisplay.TEntry",
         )
         self.data_path_entry.pack(fill=tk.X)
 

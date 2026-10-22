@@ -137,7 +137,13 @@ modules:
         buildsystem: autotools
         subdir: unix
         post-install:
-          - chmod +w ${FLATPAK_DEST}/lib/libtcl*tk*.so
+          # The glob was `libtcl*tk*.so`, which matches nothing: Tk installs
+          # libtk8.6.so, and there is no "tcl" in that name. Only a real build
+          # finds this -- `bash -n` and yaml.safe_load both pass it happily,
+          # and the failure surfaces as
+          #   chmod: cannot access '/app/lib/libtcl*tk*.so': No such file
+          # rather than as anything pointing at the manifest.
+          - chmod +w ${FLATPAK_DEST}/lib/libtk*.so
         build-options:
           cflags: -DTCL_UTF_MAX=4
         cleanup:

@@ -13,7 +13,6 @@ Run: /usr/bin/python3 packaging/validate_recipes.py
 import json
 import pathlib
 import re
-import subprocess
 import sys
 
 import yaml
@@ -179,7 +178,6 @@ def flatpak_semantic_checks(data, label, path):
     check(isinstance(rv, str), f"runtime-version is a string, not a YAML number ({rv!r})")
 
     fa = data.get("finish-args", [])
-    fa_s = set(fa)
 
     def has(pred, msg):
         check(any(pred(x) for x in fa), msg)

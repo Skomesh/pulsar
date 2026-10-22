@@ -63,6 +63,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   The two classifiers carried separate GPU hint lists and `classify_device_name`
   was missing `hdmi`.
 
+### Removed
+- The three built-in routing profiles (`Headphones (single output)`,
+  `Per-application routing (4 channels)`, `Stereo split (apps + voice)`).
+  The profile list is now only what the user saved, so a fresh install starts
+  empty instead of showing three profiles the user never created.
+  - `src/pulsar/utils/presets/builtin_profiles.json` — deleted; the package
+    no longer ships any preset data
+  - `ProfileManager._load_builtin`, `is_builtin_name`, `is_shadowed_by_user`
+    and the deprecated `is_builtin` — removed, along with the shadowing
+    machinery that existed only to let a user profile override a built-in one
+  - The `presets/*.json` package-data declaration in `pyproject.toml` —
+    removed, since there is no longer any data to ship
+
 ## [0.1.0] - 2026-06-17
 
 First tagged snapshot of the fork. Early development; inherits pactl-gui's MVP

@@ -137,7 +137,13 @@ modules:
         buildsystem: autotools
         subdir: unix
         post-install:
-          - chmod +w ${FLATPAK_DEST}/lib/libtcl*tk*.so
+          # The glob was `libtcl*tk*.so`, which matches nothing: Tk installs
+          # libtk8.6.so, and there is no "tcl" in that name. Only a real build
+          # finds this -- `bash -n` and yaml.safe_load both pass it happily,
+          # and the failure surfaces as
+          #   chmod: cannot access '/app/lib/libtcl*tk*.so': No such file
+          # rather than as anything pointing at the manifest.
+          - chmod +w ${FLATPAK_DEST}/lib/libtk*.so
         build-options:
           cflags: -DTCL_UTF_MAX=4
         cleanup:
@@ -183,9 +189,8 @@ modules:
     build-commands:
       # pyproject.toml declares `dependencies = []`. There is no pip install to
       # do: the package is pure stdlib + tkinter and is run from source inside
-      # /app. Copying the tree keeps builtin_profiles.json (package-data,
-      # declared in pyproject.toml) next to the code that reads it, which is
-      # what utils/profile_manager.py expects.
+      # /app. Copying the tree is all that is needed -- the package ships no
+      # data files, so there is nothing to place next to the code.
       - install -d /app/pulsar
       - cp -r src/pulsar/. /app/pulsar/
       - install -d /app/bin

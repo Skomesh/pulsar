@@ -56,7 +56,7 @@ jobs:
         #                working on a fresh runner.
         run: |
           sudo apt-get update
-          sudo apt-get install -y libpython3-dev python3-tk
+          sudo apt-get install -y libpython3-dev python3-tk xvfb
 
       - name: Install Python dependencies
         # Prefer the project's [dev] extra; fall back to a minimal set if
@@ -172,12 +172,21 @@ jobs:
                       % top
                   )
 
-          # The preset data must actually ship as a .json payload.
+          # The wheel must NOT ship built-in profile data. The three shipped
+          # profiles were removed deliberately, so a .json payload showing up
+          # in the wheel means a stale build/ or src/pulsar.egg-info/ leaked
+          # the deleted file back into the build -- which is easy to miss,
+          # because the app reads profiles from the XDG data dir and works
+          # perfectly well either way.
           data = [n for n in names if n.endswith(".json")]
-          if not data:
-              errors.append("no preset .json shipped; built-in profiles would be empty")
+          if data:
+              errors.append(
+                  "wheel ships built-in profile data %s; the built-in "
+                  "profiles were removed and this is stale build output"
+                  % data
+              )
           else:
-              print("preset data:", data)
+              print("no built-in profile data shipped (expected)")
 
           for e in errors:
               print("::error::" + e)
@@ -203,11 +212,10 @@ jobs:
           print('both console entry points importable: OK')
           "
 
-      - name: Verify installed package loads its preset data
-        # Stronger than inspecting the zip: proves the installed package can
-        # actually READ the data it shipped. A wheel can contain the file and
-        # still resolve it to the wrong path, which is exactly what
-        # _load_builtin used to do.
+      - name: Verify installed package starts with no default profiles
+        # The profile list is only what the user saved. A fresh install
+        # must therefore be EMPTY -- if this ever fails, something is
+        # shipping default profiles again.
         run: |
           set -euo pipefail
           cd /tmp
@@ -215,9 +223,9 @@ jobs:
           import tempfile
           from pulsar.utils.profile_manager import ProfileManager
           pm = ProfileManager(presets_dir=tempfile.mkdtemp())
-          n = len(pm._load_builtin())
-          assert n > 0, 'installed package loaded ZERO built-in profiles'
-          print(f'built-in profiles load from installed wheel: {n}')
+          names = pm.get_profile_names()
+          assert not names, f'installed package ships default profiles: {names}'
+          print('installed package starts with no default profiles: OK')
           "
 
       - name: Check packaging metadata agrees across formats
@@ -237,24 +245,56 @@ jobs:
         run: python3 scripts/check_debian_rules.py
 
       - name: Run tests
-        # Allow the absence of a tests/ tree for now (project is pre-alpha).
-        # If tests/ exists and has at least one test file, run pytest normally
-        # so real test failures will still fail the job.
-        run: |
-          if [ -d tests ] && [ -n "$(find tests -name 'test_*.py' -o -name '*_test.py' 2>/dev/null)" ]; then
-            python3 -m pytest tests/
-          else
-            echo "No tests found in tests/, skipping pytest"
-          fi
-
-      - name: Validate bundled preset JSON
-        # builtin_profiles.json ships in the package and is parsed at
-        # startup, so a syntax error there breaks every launch. This used
-        # to point at presets/user_presets.json, which is per-user runtime
-        # data and no longer tracked -- the check was dead code.
+        # A display is started so the GUI tests actually RUN rather than
+        # skipping. This matters more than it looks: on 2026-10-21 the app
+        # could not open at all -- MainWindow() raised AttributeError on a
+        # deleted method -- and the suite reported 295 passed, because
+        # every GUI test is display-gated. A green suite and a dead app is
+        # the worst combination available; it actively reports safety.
+        #
+        # The count assertion at the end is the load-bearing part. If DISPLAY
+        # is wrong, Xvfb failed, or a test module loses its skip guard, the
+        # tests silently skip and the job goes green having verified nothing.
+        # This step fails instead.
         run: |
           set -euo pipefail
-          for f in src/pulsar/utils/presets/*.json; do
-            python3 -c "import json,sys; json.load(open('$f'))"
-            echo "valid: $f"
+
+          if [ ! -d tests ] || [ -z "$(find tests -name 'test_*.py' -o -name '*_test.py' 2>/dev/null)" ]; then
+            echo "No tests found in tests/, skipping pytest"
+            exit 0
+          fi
+
+          # Run 1: headless, with DISPLAY explicitly empty. This must happen
+          # BEFORE Xvfb starts, otherwise both runs see a display, the two
+          # counts are equal, and the comparison below fails on a correct tree.
+          DISPLAY= python3 -m pytest tests/ -q 2>&1 | tee /tmp/headless.txt
+
+          # Run 2: with a real display, so the GUI tests execute.
+          Xvfb :99 -screen 0 1280x900x24 -nolisten tcp &
+          XVFB_PID=$!
+          # shellcheck disable=SC2064
+          trap "kill $XVFB_PID 2>/dev/null || true" EXIT
+          export DISPLAY=:99
+
+          # Do not start the suite until the server is actually accepting
+          # connections -- Tk raises TclError immediately otherwise.
+          for _ in $(seq 1 30); do
+            if python3 -c "import tkinter; tkinter.Tk()" 2>/dev/null; then
+              break
+            fi
+            sleep 1
           done
+          python3 -c "import tkinter; r = tkinter.Tk(); r.destroy()"
+
+          python3 -m pytest tests/ -q 2>&1 | tee /tmp/gui.txt
+
+          HEADLESS=$(grep -Eo '[0-9]+ passed' /tmp/headless.txt | tail -1 | grep -Eo '^[0-9]+')
+          GUI=$(grep -Eo '[0-9]+ passed' /tmp/gui.txt | tail -1 | grep -Eo '^[0-9]+')
+          echo "headless: ${HEADLESS} passed / display: ${GUI} passed"
+
+          if [ "$GUI" -le "$HEADLESS" ]; then
+            echo "::error::The display run did not execute more tests than the headless run."
+            echo "::error::The GUI tests are skipping in CI, which is the exact condition"
+            echo "::error::that let a non-starting application ship green."
+            exit 1
+          fi

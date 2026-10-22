@@ -638,15 +638,17 @@ class TestProfiles(CliTestBase):
 
     def test_lists_profile_names(self):
         with self.mgr(get_profile_names=mock.Mock(
-                return_value=["Stereo split (apps + voice)"])):
+                return_value=["Apps + Voice Split"])):
             payload = self.run_cli_json("profile", "list")
 
         self.assertEqual(payload["count"], 1)
-        self.assertIn("Stereo split", payload["profiles"][0]["name"])
+        self.assertIn("Apps + Voice", payload["profiles"][0]["name"])
 
     def test_show_prints_devices_and_routes_from_the_real_keys(self):
-        with self.mgr(get_profile=mock.Mock(return_value=self.PROFILE)):
-            code, out, _ = self.run_cli("profile", "show", "Stereo split")
+        with self.mgr(get_profile_names=mock.Mock(
+                return_value=["Apps + Voice Split"]),
+                      get_profile=mock.Mock(return_value=self.PROFILE)):
+            code, out, _ = self.run_cli("profile", "show", "Apps + Voice Split")
 
         self.assertEqual(code, 0)
         self.assertIn("app_sink", out)
@@ -656,9 +658,11 @@ class TestProfiles(CliTestBase):
     def test_apply_passes_the_profile_dict_not_the_name(self):
         """apply_profile takes a dict; handing it a name would be a TypeError."""
         applied = mock.Mock(return_value={"errors": [], "created": []})
-        with self.mgr(get_profile=mock.Mock(return_value=self.PROFILE),
+        with self.mgr(get_profile_names=mock.Mock(
+                return_value=["Apps + Voice Split"]),
+                      get_profile=mock.Mock(return_value=self.PROFILE),
                       apply_profile=applied):
-            code, _, _ = self.run_cli("profile", "apply", "Stereo split")
+            code, _, _ = self.run_cli("profile", "apply", "Apps + Voice Split")
 
         self.assertEqual(code, 0)
         self.assertIs(applied.call_args[0][0], self.PROFILE)
@@ -681,14 +685,14 @@ class TestProfiles(CliTestBase):
         self.assertIn("nosuch", err)
 
     def test_apply_matches_a_partial_profile_name(self):
-        """Profile names are long; `apply stereo` should find the one."""
+        """Profile names are long; `apply apps` should find the one."""
         applied = mock.Mock(return_value={"errors": [], "created": []})
         with self.mgr(
-            get_profile_names=mock.Mock(return_value=["Stereo split (apps + voice)"]),
+            get_profile_names=mock.Mock(return_value=["Apps + Voice Split"]),
             get_profile=mock.Mock(return_value=self.PROFILE),
             apply_profile=applied,
         ):
-            code, _, _ = self.run_cli("profile", "apply", "stereo split")
+            code, _, _ = self.run_cli("profile", "apply", "apps + voice")
 
         self.assertEqual(code, 0)
         applied.assert_called_once()

@@ -13,7 +13,6 @@ Run: /usr/bin/python3 packaging/validate_recipes.py
 import json
 import pathlib
 import re
-import subprocess
 import sys
 
 import yaml
@@ -155,12 +154,17 @@ def snap_semantic_checks(data):
     v = str(data.get("version", ""))
     check("PLACEHOLDER" in v, f"version is an explicit placeholder ({v})")
 
-    # packaged presets JSON must be reachable via package-data (pyproject)
+    # Pulsar ships no default profiles, so there is no preset data to
+    # reach via package-data. The package-data declaration that used to
+    # ship builtin_profiles.json is gone too; a package that starts
+    # shipping data again must declare it here or the wheel will not
+    # contain it.
     pyproject = (REPO / "pyproject.toml").read_text()
-    check("presets/*.json" in pyproject,
-          "pyproject ships presets/*.json as package-data")
-    check((REPO / "src/pulsar/utils/presets/builtin_profiles.json").is_file(),
-          "builtin_profiles.json exists in the package")
+    check("package-data" not in pyproject,
+          "pyproject declares no package-data")
+    check(not (REPO / "src/pulsar/utils/presets").exists()
+          or not list((REPO / "src/pulsar/utils/presets").glob("*.json")),
+          "no default profile JSON is bundled in the package")
 
 
 def flatpak_semantic_checks(data, label, path):
@@ -174,7 +178,6 @@ def flatpak_semantic_checks(data, label, path):
     check(isinstance(rv, str), f"runtime-version is a string, not a YAML number ({rv!r})")
 
     fa = data.get("finish-args", [])
-    fa_s = set(fa)
 
     def has(pred, msg):
         check(any(pred(x) for x in fa), msg)

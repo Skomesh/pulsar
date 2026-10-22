@@ -234,14 +234,13 @@ class MainWindow:
             command=self.on_device_type_changed,
         ).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=2)
 
-        # Add format example label
-        self.command_format_label = ttk.Label(
-            frame,
-            text="Format: pactl load-module module-null-sink media.class=Audio/Duplex sink_name=<name> channels=<channels>",
-            font=("", 9, "italic"),
-            foreground="gray"
-        )
-        self.command_format_label.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(0, 10))
+        # The old static "Format: pactl load-module module-null-sink ..."
+        # hint used to sit here. It restated what the live Command Preview
+        # below already shows, and users read it as something to type. The
+        # widget is still created (empty, ungridded) because
+        # on_device_type_changed() writes device-type text into it and
+        # would raise AttributeError without it.
+        self.command_format_label = ttk.Label(frame, text="")
 
         # Basic Options Section
         basic_frame = ttk.LabelFrame(frame, text="Basic Options", padding="10")
@@ -262,6 +261,60 @@ class MainWindow:
 
         # Track if user has manually entered a name
         self.user_has_custom_name = False
+
+        # The field starts EMPTY. It used to be pre-filled with e.g.
+        # "stereo (auto)", which meant typing a new name required erasing
+        # the old one first. Several handlers outside this function still
+        # write an auto-name in (on_audio_preset_selected,
+        # refresh_create_tab_state), so this trace is the single choke
+        # point: any value still wearing the " (auto)" suffix is dropped
+        # and the field goes back to blank. A name the user typed never
+        # carries that suffix, so it is left alone. Auto-naming still
+        # happens at create time when the field is empty.
+        def _track_name_field(*_args):
+            """Single choke point for the name field.
+
+            Two things happen here. First, any value still wearing the
+            " (auto)" suffix is dropped and the field goes back to blank:
+            on_audio_preset_selected and refresh_create_tab_state both
+            write an auto-name in, and the user reported having to erase
+            it before typing. Second, user_has_custom_name is kept in sync
+            with what is actually in the field — those handlers overwrite
+            any name whose flag is False, so a name the user typed would
+            otherwise be destroyed by the next preset change. A real name
+            never carries the suffix, so it is left untouched, and
+            auto-naming still happens at create time when the field is
+            empty.
+            """
+            value = self.sink_name_var.get()
+            if value.endswith(" (auto)"):
+                self.sink_name_var.set("")
+                self._set_name_field_normal()
+            else:
+                self.user_has_custom_name = bool(value.strip())
+
+        self.sink_name_var.trace_add("write", _track_name_field)
+
+        # Placeholder hint. ttk has no native placeholder, so it is a
+        # separate gray label beside the entry rather than text sitting in
+        # the field that the user would have to delete. It is hidden as
+        # soon as a real name is typed.
+        self.sink_name_placeholder = ttk.Label(
+            basic_frame,
+            text="(blank — a name is chosen automatically)",
+            font=("", 8, "italic"),
+            foreground="gray",
+        )
+        self.sink_name_placeholder.grid(row=0, column=2, sticky=tk.W,
+                                        padx=(5, 0), pady=5)
+
+        def _toggle_name_placeholder(*_args):
+            if self.sink_name_var.get().strip():
+                self.sink_name_placeholder.grid_remove()
+            else:
+                self.sink_name_placeholder.grid()
+
+        self.sink_name_var.trace_add("write", _toggle_name_placeholder)
 
         # Sink description - kept for backward compatibility but less emphasized
         ttk.Label(basic_frame, text="Description (optional):").grid(
@@ -342,15 +395,89 @@ class MainWindow:
         ttk.Label(self.advanced_frame, text="Sample Rate (Hz):").grid(
             row=0, column=0, sticky=tk.W, pady=5
         )
-        self.rate_var = tk.StringVar(value="44100")
-        rate_combo = ttk.Combobox(
+        def _detect_default_sink_rate(default=48000):
+            """Return the sample rate of the DEFAULT sink, in Hz.
+
+            The form used to hardcode 44100, so on a machine whose hardware
+            runs at 48k every sink the app created was resampled on the way
+            to the speakers. `pactl list sinks` reports each sink's spec as
+            e.g. "float32le 2ch 48000Hz"; we read the Hz off the default
+            sink so new devices match the hardware.
+
+            Falls back to 48000 when there is no default sink, the server
+            can't be queried, or the spec has no Hz in it.
+            """
+            try:
+                default_sink = PactlRunner.get_default_sink()
+            except Exception:
+                return default
+            if not default_sink:
+                return default
+            try:
+                sinks = PactlRunner.list_sinks()
+            except Exception:
+                return default
+            for sink in sinks or []:
+                if sink.get("name") != default_sink:
+                    continue
+                match = re.search(r"(\d+)\s*Hz", str(sink.get("sample_spec") or ""))
+                if match:
+                    return int(match.group(1))
+                return default
+            return default
+
+        detected_rate = str(_detect_default_sink_rate())
+        # Kept on the instance so the code paths that need the hardware's
+        # rate -- notably on_audio_preset_selected -- do not have to
+        # hardcode one. See the comment on that call site.
+        self._detected_rate = detected_rate
+        self.rate_var = tk.StringVar(value=detected_rate)
+        rate_choices = ["8000", "16000", "22050", "44100",
+                        "48000", "88200", "96000", "192000"]
+        if detected_rate not in rate_choices:
+            # Hardware at an unusual rate (11025, 176400, ...) still has to
+            # be selectable, and a combobox whose selection isn't in its
+            # own value list reads as broken.
+            rate_choices.append(detected_rate)
+            rate_choices.sort(key=int)
+        self.rate_combo = ttk.Combobox(
             self.advanced_frame,
             textvariable=self.rate_var,
-            values=("8000", "16000", "22050", "44100", "48000", "88200", "96000", "192000"),
+            values=tuple(rate_choices),
             width=15
         )
-        rate_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=5)
-        rate_combo.current(3)  # Default to 44100
+        self.rate_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=5)
+        self.rate_combo.current(rate_choices.index(detected_rate))
+
+        # Applying a preset hard-resets the rate to 44100 whenever the
+        # preset has no "rate" of its own. That happens on every preset
+        # change AND on every return to the Create tab
+        # (refresh_create_tab_state -> on_audio_preset_selected), so a
+        # one-shot fixup after setup would be undone again. Instead the
+        # detected default is enforced here, on every write, until the
+        # user picks a rate themselves. _rate_user_set is flipped by the
+        # bindings below, which fire only for direct interaction with the
+        # rate widget — programmatic writes never set it.
+        self._rate_user_set = False
+        self._rate_fixup_running = False
+
+        def _restore_detected_rate(*_args):
+            if self._rate_user_set or self._rate_fixup_running:
+                return
+            if self.rate_var.get() == "44100" and detected_rate != "44100":
+                self._rate_fixup_running = True
+                try:
+                    self.rate_var.set(detected_rate)
+                finally:
+                    self._rate_fixup_running = False
+
+        self.rate_var.trace_add("write", _restore_detected_rate)
+
+        def _mark_rate_user_set(*_args):
+            self._rate_user_set = True
+
+        self.rate_combo.bind("<<ComboboxSelected>>", _mark_rate_user_set)
+        self.rate_combo.bind("<KeyRelease>", _mark_rate_user_set)
 
         # Sample Format (with descriptive labels)
         ttk.Label(self.advanced_frame, text="Sample Format:").grid(
@@ -390,14 +517,54 @@ class MainWindow:
             row=2, column=0, sticky=tk.W, pady=5
         )
         self.channels_var = tk.StringVar(value="2")
-        channels_combo = ttk.Combobox(
+        # A custom channel count is a real option, not a secret.
+        #
+        # The control used to be an editable combobox whose dropdown listed
+        # only 1/2/4/6/8. Typing a different number did work, but nothing
+        # said so: the dropdown looked like the complete set of allowed
+        # values, and user testing read it exactly that way -- "channels
+        # are still limited to 8 with no custom field".
+        #
+        # PulseAudio has no 8-channel ceiling (`channels=16` loads and
+        # reports 'float32le 16ch 48000Hz'). The ceiling was in the UI.
+        #
+        # So the common values stay as suggestions, and "Custom" is an
+        # explicit entry in the list that reveals a field to type into --
+        # the same shape as the Channel Map row directly below it, so the
+        # panel teaches one pattern instead of two.
+        self.channels_combo = ttk.Combobox(
             self.advanced_frame,
             textvariable=self.channels_var,
-            values=("1", "2", "4", "6", "8"),
-            width=10
+            values=("1", "2", "4", "6", "8", "Custom"),
+            width=10,
+            state="readonly",
         )
-        channels_combo.grid(row=2, column=1, sticky=tk.W, padx=5, pady=5)
-        channels_combo.current(1)  # Default to stereo (2 channels)
+        self.channels_combo.grid(row=2, column=1, sticky=tk.W, padx=5, pady=5)
+        self.channels_combo.current(1)  # Default to stereo (2 channels)
+        self.channels_combo.bind(
+            "<<ComboboxSelected>>", self._on_channels_preset_change
+        )
+
+        # The typed channel count, used only when "Custom" is selected.
+        #
+        # It lives on its own row UNDER the dropdown and is hidden until
+        # Custom is chosen. The first version put it to the right of the
+        # dropdown, where it read as a permanent second field and made the
+        # row look like a form with two inputs for one value.
+        self.channels_custom_var = tk.StringVar()
+        self.channels_custom_label = ttk.Label(
+            self.advanced_frame, text="Custom channels:"
+        )
+        self.channels_custom_entry = ttk.Entry(
+            self.advanced_frame, textvariable=self.channels_custom_var, width=10,
+        )
+        # Start hidden: "2" is selected, so the custom field has no meaning
+        # yet and showing it would only invite confusion.
+        self.channels_custom_label.grid_remove()
+        self.channels_custom_entry.grid_remove()
+        # The row offset applied to everything below the Channels row when
+        # the custom field is shown. 0 means the field is hidden.
+        self._advanced_row_offset = 0
 
         # Channel Map
         # Channel Map — preset dropdown + custom entry. The map tells
@@ -405,7 +572,9 @@ class MainWindow:
         # (front-left, front-right, etc). Without it, PA picks a default
         # based on channel count, but for surround setups the user often
         # wants explicit control.
-        ttk.Label(self.advanced_frame, text="Channel Map:").grid(
+        self.channel_map_label = ttk.Label(
+            self.advanced_frame, text="Channel Map:")
+        self.channel_map_label.grid(
             row=3, column=0, sticky=tk.W, pady=5
         )
         # The map labels are "preset name — channel_layout". We split on
@@ -456,9 +625,14 @@ class MainWindow:
 
         # Update default map when channels preset changes (Stereo is
         # the natural default for 2 channels, etc.)
+        # Note the signature: no `self` parameter. This is a trace
+        # callback, so Tk calls it with (name, index, mode) and a `self`
+        # parameter would bind to the variable's NAME STRING -- shadowing
+        # the real MainWindow. `self` here is the enclosing
+        # setup_create_tab scope's.
         def _on_channels_change_default_map(*_):
             try:
-                ch = int(self.channels_var.get())
+                ch = self._effective_channels()
             except (ValueError, tk.TclError):
                 return
             # Don't override user custom choice
@@ -476,6 +650,12 @@ class MainWindow:
             }
             default_map = defaults.get(ch)
             if not default_map:
+                # No preset layout for this count (e.g. 16). Leaving the
+                # previous 2-entry map in place would make pactl reject the
+                # module — a channel map whose length doesn't match the
+                # channel count is an error. An empty map means "PulseAudio
+                # picks from the channel count", which is what we want.
+                self.channel_map_var.set("")
                 return
             # Find a matching preset by map string
             for label, layout in self.channel_map_presets:
@@ -485,24 +665,30 @@ class MainWindow:
             self.channel_map_var.set(default_map)
 
         self.channels_var.trace_add("write", _on_channels_change_default_map)
+        # The custom field is a second source for the same value, so it
+        # needs the same reactions. Without this, typing 16 into the
+        # custom field would not update the channel map default or the
+        # command preview until the dropdown was touched.
+        self.channels_custom_var.trace_add("write", _on_channels_change_default_map)
 
         # Additional Properties (moved to row 5 to make room for
         # the custom channel-map entry that appears below the
         # channel-map combo when "Custom" is selected).
-        ttk.Label(self.advanced_frame, text="Additional Properties:").grid(
+        self.properties_label = ttk.Label(
+            self.advanced_frame, text="Additional Properties:")
+        self.properties_label.grid(
             row=5, column=0, sticky=tk.W, pady=5
         )
         self.properties_var = tk.StringVar()
-        properties_entry = ttk.Entry(self.advanced_frame, textvariable=self.properties_var, width=30)
-        properties_entry.grid(row=5, column=1, sticky=(tk.W, tk.E), padx=5, pady=5)
+        self.properties_entry = ttk.Entry(
+            self.advanced_frame, textvariable=self.properties_var, width=30)
+        self.properties_entry.grid(row=5, column=1, sticky=(tk.W, tk.E), padx=5, pady=5)
 
-        # Properties help label
-        ttk.Label(
-            self.advanced_frame,
-            text="e.g., device.description='My Custom Sink'",
-            font=("", 8, "italic"),
-            foreground="gray"
-        ).grid(row=6, column=1, sticky=tk.W, padx=5, pady=(0, 5))
+        # The gray "e.g., device.description='My Custom Sink'" hint that
+        # used to sit under this entry is gone. It was a second static
+        # snippet of pactl syntax to read alongside the live Command
+        # Preview, which already renders sink_properties=... from
+        # whatever is typed here.
 
         # Loopback Latency — affects any future loopback created from
         # this sink. Too low = robotic/crackly audio (buffer underrun).
@@ -510,7 +696,9 @@ class MainWindow:
         # with sample rate because higher rates have tighter per-frame
         # deadlines (21μs at 48kHz, 5μs at 192kHz) while per-frame
         # DSP cost is roughly constant.
-        ttk.Label(self.advanced_frame, text="Loopback Latency:").grid(
+        self.latency_label = ttk.Label(
+            self.advanced_frame, text="Loopback Latency:")
+        self.latency_label.grid(
             row=7, column=0, sticky=tk.W, pady=5
         )
         # Build the preset list. The "Auto" option picks the
@@ -636,6 +824,7 @@ class MainWindow:
         self.sink_name_var.trace_add("write", self.update_command_preview)
         self.audio_preset_var.trace_add("write", self.update_command_preview)
         self.channels_var.trace_add("write", self.update_command_preview)
+        self.channels_custom_var.trace_add("write", self.update_command_preview)
         self.rate_var.trace_add("write", self.update_command_preview)
         self.format_var.trace_add("write", self.update_command_preview)
         self.channel_map_var.trace_add("write", self.update_command_preview)
@@ -646,7 +835,10 @@ class MainWindow:
         frame.columnconfigure(1, weight=1)
 
         # Initialize preset values AFTER all UI elements are created
+        # (on_audio_preset_selected hard-sets 44100; the trace registered
+        # above puts the detected hardware rate straight back.)
         self.on_audio_preset_selected(None)
+        self.update_command_preview()
 
     def setup_manage_tab(self):
         """Set up the Manage tab content with simplified category-based view."""
@@ -657,63 +849,71 @@ class MainWindow:
         # provides the scrollbar.
         frame = self._setup_scrollable_tab(self.manage_tab, padding="10")
 
-        # --- Quick Routing Panel (always visible) ---
-        # Prominent, prominent panel at the TOP so users immediately
-        # see how to route a selected virtual sink to hardware outputs.
-        # The tree below is where they pick what to route.
-        quick_route_frame = ttk.LabelFrame(
-            frame, text="Route Selected Sink", padding="10"
+        # --- Where is my data? --------------------------------------------
+        # The user asked "unsure where the profiles are saved" -- the
+        # Profiles tab lists profiles but never says where they live, so
+        # there was no way to find or back the directory up.
+        #
+        # Read-only, not disabled: a disabled ttk.Entry cannot be selected
+        # or copied, which defeats the purpose. `state="readonly"` still
+        # gives the user normal text selection and Ctrl+C.
+        data_path_frame = ttk.LabelFrame(
+            frame, text="Your Data", padding="10"
         )
-        quick_route_frame.pack(fill=tk.X, padx=0, pady=(0, 10))
-        # Status line
-        self.quick_route_status_var = tk.StringVar(
-            value="Select a virtual sink below, then check the outputs you "
-                  "want its audio to play through, then click 'Apply Routing'."
-        )
+        data_path_frame.pack(fill=tk.X, padx=0, pady=(0, 10))
         ttk.Label(
-            quick_route_frame,
-            textvariable=self.quick_route_status_var,
-            wraplength=600, font=("", 9),
-        ).pack(anchor=tk.W, pady=(0, 5))
-        # Checkbox list of hardware outputs
-        self.quick_route_listbox_frame = ttk.Frame(quick_route_frame)
-        self.quick_route_listbox_frame.pack(fill=tk.X, pady=(0, 5))
-        self.quick_route_listbox = tk.Listbox(
-            self.quick_route_listbox_frame,
-            height=4,
-            selectmode=tk.EXTENDED,
-            exportselection=False,
+            data_path_frame,
+            text="Profiles and presets are saved here (Ctrl+C to copy):",
             font=("", 9),
+        ).pack(anchor=tk.W, pady=(0, 3))
+        from pulsar.utils.paths import user_presets_dir
+
+        # Resolved, not hard-coded to "~/.local/share" -- the whole point
+        # is that this is the directory the app actually writes to.
+        self.data_path_var = tk.StringVar(value=str(user_presets_dir()))
+
+        # Styled to look like plain text, not a form field.
+        #
+        # The user reported that a readonly-but-boxed Entry gives the
+        # impression there is some way to edit it. Readonly Entry still
+        # renders the sunken border and field background, so "readonly"
+        # is invisible -- the only signal was that clicking did nothing.
+        #
+        # Flattening the border and the field background removes that
+        # signal while keeping everything that matters: the text is still
+        # selected with the mouse, still takes Ctrl+C, and still scrolls
+        # the selection into view. A disabled widget would lose exactly
+        # that, which is why this is readonly rather than disabled.
+        #
+        # The colour has to be the frame's own background, or the field
+        # shows as a lighter rectangle against the panel. Looked up from
+        # the live widget rather than hard-coded to a colour that is
+        # right on this theme and wrong on the next one.
+        try:
+            path_bg = ttk.Style().lookup("TLabelframe.Label", "background")
+            if not path_bg:
+                path_bg = data_path_frame.cget("background")
+        except Exception:  # pragma: no cover - theme without the option
+            path_bg = ""
+        # ttk widgets take border and relief from the style, not from the
+        # constructor -- passing them to ttk.Entry() is a TypeError.
+        ttk.Style().configure(
+            "PathDisplay.TEntry",
+            borderwidth=0,
+            relief="flat",
+            padding=1,
+            **({"fieldbackground": path_bg} if path_bg else {}),
         )
-        self.quick_route_listbox.pack(
-            side=tk.LEFT, fill=tk.BOTH, expand=True
+
+        self.data_path_entry = ttk.Entry(
+            data_path_frame,
+            textvariable=self.data_path_var,
+            state="readonly",
+            width=60,
+            style="PathDisplay.TEntry",
         )
-        qr_scroll = ttk.Scrollbar(
-            self.quick_route_listbox_frame, orient=tk.VERTICAL,
-            command=self.quick_route_listbox.yview,
-        )
-        qr_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        self.quick_route_listbox.configure(yscrollcommand=qr_scroll.set)
-        # Buttons
-        qr_buttons = ttk.Frame(quick_route_frame)
-        qr_buttons.pack(fill=tk.X)
-        ttk.Button(
-            qr_buttons, text="Apply Routing",
-            command=self._on_quick_route_apply, width=15,
-        ).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(
-            qr_buttons, text="Stop All Routing",
-            command=self._on_quick_route_stop_all, width=15,
-        ).pack(side=tk.LEFT, padx=5)
-        ttk.Button(
-            qr_buttons, text="Refresh Outputs",
-            command=self._refresh_quick_route_outputs, width=15,
-        ).pack(side=tk.LEFT, padx=5)
-        # State for the quick route panel
-        self._quick_route_outputs: List[str] = []
-        self._quick_route_sink_name: Optional[str] = None
-        # Initial population of the output list
-        self._refresh_quick_route_outputs()
+        self.data_path_entry.pack(fill=tk.X)
+
 
         # Add Show System Modules checkbox
         self.show_system_var = tk.BooleanVar(value=False)
@@ -812,65 +1012,51 @@ class MainWindow:
         # and unreachable. No test caught it because test_tab_refresh.py
         # drives handlers on object.__new__(MainWindow), where no widget is
         # ever packed and display is unobservable.
-        self.routing_frame = ttk.LabelFrame(frame, text="Routing")
-        self.routing_frame.pack(fill=tk.X, pady=5)  # matches button_frame
-        self.routing_frame.columnconfigure(1, weight=1)
-
-        # --- Single-output routing (legacy dropdown) -------------------
-        # Status line
-        self.routing_status_var = tk.StringVar(value="Select a virtual sink to route")
-        ttk.Label(
-            self.routing_frame,
-            textvariable=self.routing_status_var,
-            font=("", 9),
-        ).grid(row=0, column=0, columnspan=3, sticky=tk.W, padx=5, pady=(5, 2))
-
-        # Output dropdown
-        ttk.Label(self.routing_frame, text="Route to:").grid(
-            row=1, column=0, sticky=tk.W, padx=5, pady=2
-        )
-        self.routing_output_var = tk.StringVar()
-        self.routing_output_combo = ttk.Combobox(
-            self.routing_frame,
-            textvariable=self.routing_output_var,
-            values=(),
-            state="disabled",
-            width=60,
-        )
-        self.routing_output_combo.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=5, pady=2)
-
-        # Buttons
-        self.route_button = ttk.Button(
-            self.routing_frame,
-            text="Apply Routing",
-            command=self.apply_routing,
-            state="disabled",
-        )
-        self.route_button.grid(row=1, column=2, padx=5, pady=2)
-
-        self.stop_route_button = ttk.Button(
-            self.routing_frame,
-            text="Stop Routing",
-            command=self.stop_routing,
-            state="disabled",
-        )
-        self.stop_route_button.grid(row=1, column=3, padx=5, pady=2)
-
-        self.routing_frame.columnconfigure(1, weight=1)
-
-        # --- Multi-output routing (Phase 5b) ----------------------------
+        #
+        # ON REDUNDANCY (user: "Is multi routing able to replace the standard
+        # routing panel? It sounds like it's just a more featureful version."):
+        # yes -- apply_multi_routing is a strict superset of the old
+        # apply_routing. One checked target makes the two bodies collapse to
+        # the same end state, except multi is idempotent and will not tear
+        # down a route the user did not ask to change. See
+        # tests/test_manage_tab.py::TestMultiRoutingSubsumesSingleOutput, which
+        # proves it executably.
+        #
+        # The single-output dropdown has therefore been removed, along with
+        # apply_routing, stop_routing and update_routing_panel. The Manage tab
+        # offered two overlapping ways to do the same thing and there was no
+        # way for a user to tell which one was the real one.
+        #
+        # A SECOND duplicate then turned up in user testing: the "Route
+        # Selected Sink" panel at the top of the tab was already a
+        # multi-output panel, not a single-output one. It and this one did
+        # the same job on different attributes (_quick_route_sink_name vs
+        # _routing_sink_name), and the user reported seeing both. The user
+        # chose to keep this one -- "Multi-output Routing" -- and the top
+        # panel, with _on_quick_route_apply, _on_quick_route_stop_all,
+        # _refresh_quick_route_outputs and _refresh_quick_route_panel, is
+        # gone. Nothing was lost: the top panel's two buttons are exactly
+        # the two this one already has.
+        # --- Multi-output routing -------------------------------------
         # Checkbox list of all hardware outputs. Each checked item gets a
         # loopback. Useful for the "music plays on speakers AND
         # headphones simultaneously" use case (combine-stream preset
         # from the plan, implemented via multiple loopbacks since
         # module-combine-stream does the opposite: mix multiple sources
         # INTO one sink).
+        #
+        # This used to be a LabelFrame titled "Routing" containing another
+        # LabelFrame titled "Multi-output Routing" -- a box inside a box.
+        # The outer wrapper existed because the single-output dropdown
+        # shared the panel; with that gone, one panel does not need a
+        # second frame around it.
         self.multi_routing_frame = ttk.LabelFrame(
-            self.routing_frame, text="Multi-output Routing"
+            frame, text="Multi-output Routing"
         )
-        self.multi_routing_frame.grid(
-            row=2, column=0, columnspan=4, sticky=(tk.W, tk.E), padx=5, pady=(10, 5)
+        self.multi_routing_frame.pack(
+            fill=tk.X, pady=5
         )
+        self.multi_routing_frame.columnconfigure(1, weight=1)
 
         ttk.Label(
             self.multi_routing_frame,
@@ -922,6 +1108,10 @@ class MainWindow:
             state="disabled",
         )
         self.multi_stop_all_button.pack(side=tk.LEFT, padx=5)
+
+        # Populate the output list now, so the panel is usable the moment
+        # the tab opens rather than only after the first refresh.
+        self._refresh_multi_routing_outputs()
 
         # --- Device controls — per-device volume slider, mute, set-as-default.
         # Lets the user adjust the selected virtual sink's volume without
@@ -1071,13 +1261,12 @@ class MainWindow:
         self._profile_display_names = []  # index -> label
         self._profile_actual_names = []   # index -> real name
         for n in sorted(names):
-            if self.profile_manager.is_builtin_name(n):
-                shadowed = self.profile_manager.is_shadowed_by_user(n)
-                label = f"{n}  (built-in, your edits)" if shadowed else f"{n}  (built-in)"
-            else:
-                label = n
-            self.profile_listbox.insert(tk.END, label)
-            self._profile_display_names.append(label)
+            # Every listed profile is user-owned. The built-in/shadowed
+            # distinction went away with the shipped profiles, and leaving
+            # the calls in meant MainWindow() raised AttributeError on
+            # startup -- the app would not open at all.
+            self.profile_listbox.insert(tk.END, n)
+            self._profile_display_names.append(n)
             self._profile_actual_names.append(n)
         self._set_profile_details_text(
             "Select a profile to see its details.\n\n"
@@ -1255,18 +1444,10 @@ class MainWindow:
         if not name:
             messagebox.showinfo("Delete Profile", "Please select a profile first.")
             return
-        # If this name is a built-in AND the user hasn't shadowed it,
-        # there is nothing to delete (the data lives in builtin_profiles.json).
-        if self.profile_manager.is_builtin_name(name) and \
-                not self.profile_manager.is_shadowed_by_user(name):
-            messagebox.showinfo(
-                "Delete Profile",
-                f"'{name}' is a built-in profile and cannot be deleted.\n\n"
-                "If you want to remove it from your list, you can shadow it "
-                "with your own version using 'Save Current State' (using the "
-                "same name), then delete the shadow.",
-            )
-            return
+        # No built-in guard: there are no built-ins left. Every profile in
+        # the list came from the user's own file and is theirs to delete. The
+        # old guard raised AttributeError here, on top of the one in
+        # refresh_profile_list that stopped the app launching.
         if not messagebox.askyesno(
             "Delete Profile",
             f"Delete profile '{name}'?\n\n"
@@ -2142,6 +2323,145 @@ class MainWindow:
         else:  # "both"
             return self._create_device_of_type("both")
 
+    def _show_custom_channels_field(self, show: bool):
+        """Show or hide the custom channel row, reflowing what is below it.
+
+        grid_remove rather than a disabled state: a greyed-out field on
+        screen still reads as "a field that is somehow not active", which
+        is the impression the right-hand layout gave. Hidden is hidden.
+
+        The reflow is the fiddly part. Tk's grid does not reflow: a
+        widget keeps the row it was given. The custom field therefore
+        takes the row the Channel Map was using, and everything below
+        moves down one -- otherwise the two overlap and the rows beneath
+        them are covered rather than pushed aside.
+
+        A row offset is used rather than a second set of hard-coded
+        positions, so there is one number to change and the rows cannot
+        drift out of step with each other.
+        """
+        self._advanced_row_offset = 1 if show else 0
+
+        for widget in (self.channels_custom_label, self.channels_custom_entry):
+            if show:
+                widget.grid()
+            else:
+                widget.grid_remove()
+        if show:
+            self.channels_custom_label.grid(
+                row=3, column=0, sticky=tk.W, pady=5)
+            self.channels_custom_entry.grid(
+                row=3, column=1, sticky=tk.W, padx=5, pady=5)
+
+        # Push everything below the Channels row down (or back up).
+        offset = self._advanced_row_offset
+        self.channel_map_label.grid_configure(row=3 + offset)
+        self.channel_map_combo.grid_configure(row=3 + offset)
+        self.properties_label.grid_configure(row=5 + offset)
+        self.properties_entry.grid_configure(row=5 + offset)
+        self.latency_label.grid_configure(row=7 + offset)
+        self.latency_combo.grid_configure(row=7 + offset)
+
+        # The two custom entries are gridded by their own handlers, so
+        # they have to follow the offset too.
+        if self.channel_map_custom_entry.winfo_manager() == "grid":
+            self.channel_map_custom_entry.grid_configure(row=4 + offset)
+        if self.latency_custom_entry.winfo_manager() == "grid":
+            self.latency_custom_entry.grid_configure(row=8 + offset)
+
+        if show:
+            self.channels_custom_entry.focus_set()
+
+    def _set_name_field_normal(self):
+        """Put the name field back to the theme's normal text colour.
+
+        The field used to hold grey placeholder text of its own, and the
+        grey was what signalled "auto-generated, not really yours". It no
+        longer does: the placeholder is a separate label beside the
+        field, and the field itself is either empty or holds a name the
+        user typed. So the text in it should always be normal colour.
+
+        The theme's own foreground is used rather than a hard-coded
+        "black", which is wrong on a dark theme and wrong again on the
+        next one.
+        """
+        try:
+            colour = ttk.Style().lookup("TEntry", "foreground")
+        except Exception:  # pragma: no cover - theme without the option
+            colour = ""
+        if not colour:
+            colour = "black"
+        self.sink_name_entry.config(foreground=colour)
+
+    def _on_channels_preset_change(self, event=None):
+        """Show the custom channel field only when "Custom" is chosen."""
+        custom = self.channels_var.get() == "Custom"
+        self._show_custom_channels_field(custom)
+        if not custom:
+            self.channels_custom_var.set("")
+        self.update_command_preview()
+
+    def _effective_channels(self):
+        """The channel count to use, as an int.
+
+        Raises ValueError with a message worth showing the user, rather
+        than falling back to a default. The old code did:
+
+            try:
+                channels = int(self.channels_var.get())
+            except ValueError:
+                channels = 2
+
+        so a typo silently produced a stereo sink instead of the 16
+        channels the user asked for, with no indication that anything had
+        gone wrong.
+        """
+        raw = self.channels_var.get().strip()
+        if raw == "Custom":
+            raw = self.channels_custom_var.get().strip()
+            if not raw:
+                raise ValueError(
+                    "Enter a channel count, or pick one from the list.")
+        try:
+            count = int(raw)
+        except ValueError:
+            raise ValueError(
+                f"'{raw}' is not a valid channel count. "
+                f"Use a whole number, such as 2 or 16.") from None
+        if count < 1:
+            raise ValueError(
+                f"'{count}' is not a valid channel count. "
+                f"Use a whole number of at least 1.")
+        if count > 16:
+            raise ValueError(
+                f"{count} channels is more than the maximum of 16. "
+                f"PulseAudio's null-sink tops out there, and a count "
+                f"beyond it is not a layout anyone can use.")
+        return count
+
+    def _explicit_rate(self):
+        """The sample rate to send, or None when the user has not chosen one.
+
+        The old test was `rate != "44100"`, meaning "44100 is the default,
+        so don't send it". That was true when the form hardcoded 44100 and
+        stopped being true the moment the default became the rate the
+        default sink actually runs at. Two files ended up with different
+        ideas of what 'default' meant.
+
+        The question now is simply whether the user touched the control,
+        which `_rate_user_set` tracks from the combobox's own bindings --
+        programmatic writes from preset handling do not set it.
+        """
+        if not getattr(self, "_rate_user_set", False):
+            return None
+        rate = self.rate_var.get().strip()
+        if not rate:
+            return None
+        try:
+            return int(rate)
+        except ValueError:
+            return None
+
     def _create_device_of_type(self, device_type):
         """Shared logic: gather inputs from the form, call the right PactlRunner method."""
         raw_name = self.sink_name_var.get().strip()
@@ -2171,16 +2491,17 @@ class MainWindow:
                     name = cleaned_name
                     self.sink_name_var.set(name)
                     self.user_has_custom_name = True
-                    self.sink_name_entry.config(foreground="black")
+                    self._set_name_field_normal()
                 else:
                     return
             else:
                 name = cleaned_name
 
         try:
-            channels = int(self.channels_var.get())
-        except ValueError:
-            channels = 2
+            channels = self._effective_channels()
+        except ValueError as exc:
+            messagebox.showerror("Error", str(exc))
+            return
 
         if not description:
             selected_preset = self.audio_preset_var.get()
@@ -2198,13 +2519,14 @@ class MainWindow:
 
         advanced_options = {}
         if hasattr(self, "show_advanced_var") and self.show_advanced_var.get():
-            rate = self.rate_var.get().strip()
-            if rate and rate != "44100":
-                try:
-                    advanced_options["rate"] = int(rate)
-                except ValueError:
-                    messagebox.showerror("Error", f"Invalid sample rate: {rate}")
-                    return
+            rate = self._explicit_rate()
+            if rate is not None:
+                advanced_options["rate"] = rate
+            elif self._rate_user_set and self.rate_var.get().strip():
+                messagebox.showerror(
+                    "Error",
+                    f"Invalid sample rate: {self.rate_var.get().strip()}")
+                return
             format_desc = self.format_var.get().strip()
             if format_desc and hasattr(self, "format_mappings"):
                 actual_format = self.format_mappings.get(format_desc, format_desc)
@@ -2272,6 +2594,56 @@ class MainWindow:
         # Update status
         self.status_var.set(f"Found {len(modules)} modules, {len(sinks)} sinks, {len(sources)} sources")
         self.add_output(f"Refreshed all components: {len(modules)} modules, {len(sinks)} sinks, {len(sources)} sources")
+
+        # The Multi-output Routing listbox is a view of the hardware
+        # outputs, so it is refreshed with everything else.
+        self._refresh_multi_routing_outputs()
+
+    def _refresh_multi_routing_outputs(self):
+        """Re-list the hardware outputs in the Multi-output Routing listbox.
+
+        This has to exist. The Multi-output Routing panel's listbox was
+        created and never populated: the only code that filled a
+        hardware-outputs listbox lived in the deleted "Route Selected
+        Sink" panel, and removing that panel took the populating with
+        it. The listbox looked fine -- it was just always empty, so
+        there was nothing to select and Apply to Selected did nothing.
+
+        The selection is preserved across refreshes, and outputs that
+        already carry a loopback for the selected sink are pre-checked,
+        so a refresh does not quietly drop a route the user had set up.
+        """
+        try:
+            outputs = PactlRunner.list_hardware_outputs()
+        except Exception as e:
+            outputs = []
+            self.add_output(f"Multi-output routing: failed to list outputs: {e}")
+
+        prior = set(self.multi_routing_listbox.curselection())
+        self.multi_routing_listbox.delete(0, tk.END)
+        for i, name in enumerate(outputs):
+            self.multi_routing_listbox.insert(tk.END, name)
+            if i in prior:
+                self.multi_routing_listbox.selection_set(i)
+
+        # Pre-check the outputs this sink is already routed to.
+        sink = getattr(self, "_routing_sink_name", None)
+        if sink:
+            try:
+                monitor = PactlRunner.monitor_source_for(sink)
+            except Exception:
+                monitor = None
+            if monitor:
+                try:
+                    active = {
+                        lb.get("sink") for lb in PactlRunner.list_loopbacks()
+                        if lb.get("source") == monitor
+                    }
+                except Exception:
+                    active = set()
+                for i, name in enumerate(outputs):
+                    if name in active:
+                        self.multi_routing_listbox.selection_set(i)
 
     def _map_modules_to_devices(self, modules, sinks, sources):
         """
@@ -2691,7 +3063,7 @@ class MainWindow:
         if not selected:
             self.update_details_display("Select an item to see details")
             self.unload_button.config(state="disabled")
-            self.update_routing_panel(None)
+            self._routing_sink_name = None
             self.update_device_controls_panel(None)
             return
 
@@ -2702,7 +3074,7 @@ class MainWindow:
         if not values or len(values) < 2:
             self.update_details_display("Select an item to see details")
             self.unload_button.config(state="disabled")
-            self.update_routing_panel(None)
+            self._routing_sink_name = None
             self.update_device_controls_panel(None)
             return
 
@@ -2717,17 +3089,14 @@ class MainWindow:
         else:
             self.unload_button.config(state="disabled")
 
-        # Update routing panel — only meaningful for virtual sinks
-        if entity_type == "sink":
-            self.update_routing_panel(entity_name)
-            # Also update the prominent Quick Route panel at the top
-            # of the tab so users see what to do without scrolling.
-            self._quick_route_sink_name = entity_name
-            self._refresh_quick_route_panel()
+        # Which virtual sink is selected. Set here directly rather than as a side
+        # effect of refreshing a panel: the multi-output routing code reads
+        # _routing_sink_name, and that must not depend on a UI element
+        # existing.
+        if entity_type == "sink" and PactlRunner.is_null_sink(entity_name):
+            self._routing_sink_name = entity_name
         else:
-            self.update_routing_panel(None)
-            self._quick_route_sink_name = None
-            self._refresh_quick_route_panel()
+            self._routing_sink_name = None
 
         # Update device controls panel — works for both sinks and sources
         # so the user can adjust a null-sink's playback volume OR a
@@ -2741,277 +3110,9 @@ class MainWindow:
 
         self.update_details_display(details)
 
-    # ------------------------------------------------------------------
-    # Quick Route panel (prominent panel at the top of the Manage tab)
-    # ------------------------------------------------------------------
-
-    def _refresh_quick_route_outputs(self):
-        """Re-list hardware outputs in the Quick Route checkbox listbox."""
-        try:
-            outputs = PactlRunner.list_hardware_outputs()
-        except Exception as e:
-            outputs = []
-            self.add_output(f"Quick route: failed to list outputs: {e}")
-        self._quick_route_outputs = outputs
-        # Preserve any active selection across refresh
-        prior = set(self.quick_route_listbox.curselection())
-        self.quick_route_listbox.delete(0, tk.END)
-        for i, name in enumerate(outputs):
-            # Pre-check outputs that already have an active loopback
-            # for the currently selected sink.
-            checked = i in prior
-            self.quick_route_listbox.insert(tk.END, name)
-            if checked:
-                self.quick_route_listbox.selection_set(i)
-        self._refresh_quick_route_panel()
-
-    def _refresh_quick_route_panel(self):
-        """Update the Quick Route panel's status line based on selection."""
-        sink = self._quick_route_sink_name
-        if not sink:
-            self.quick_route_status_var.set(
-                "Select a virtual sink in the tree below, then check the "
-                "outputs you want its audio to play through, then click "
-                "'Apply Routing'."
-            )
-            return
-        if not PactlRunner.is_null_sink(sink):
-            self.quick_route_status_var.set(
-                f"Selected: {sink} (hardware sink — routing not applicable)"
-            )
-            return
-        # Virtual sink — show current loopbacks
-        try:
-            monitor = PactlRunner.monitor_source_for(sink)
-            loopbacks = PactlRunner.list_loopbacks()
-            current_sinks = sorted({
-                lb["sink"] for lb in loopbacks
-                if lb.get("source") == monitor
-            })
-        except Exception:
-            current_sinks = []
-        if current_sinks:
-            self.quick_route_status_var.set(
-                f"Routing '{sink}' to: {', '.join(current_sinks)}. "
-                f"Check/uncheck outputs and click 'Apply Routing' to change."
-            )
-        else:
-            self.quick_route_status_var.set(
-                f"'{sink}' is not routed to any output. "
-                f"Check one or more outputs and click 'Apply Routing'."
-            )
-
-    def _on_quick_route_apply(self):
-        """Apply the routing for the currently selected sink to the
-        checked outputs in the Quick Route listbox.
-
-        Idempotent: routes that already exist are left alone; missing
-        routes are added; checked-but-already-routed boxes are kept;
-        unchecked loopbacks (when explicitly removed by the user) are
-        left intact — use 'Stop All Routing' to clear them.
-        """
-        sink = self._quick_route_sink_name
-        if not sink:
-            messagebox.showinfo(
-                "Apply Routing",
-                "Select a virtual sink in the tree first.",
-            )
-            return
-        if not PactlRunner.is_null_sink(sink):
-            messagebox.showinfo(
-                "Apply Routing",
-                f"'{sink}' is a hardware sink — nothing to route.",
-            )
-            return
-        sel = self.quick_route_listbox.curselection()
-        if not sel:
-            messagebox.showinfo(
-                "Apply Routing",
-                "Check at least one output in the list above.",
-            )
-            return
-        target_outputs = [self._quick_route_outputs[i] for i in sel]
-        monitor = PactlRunner.monitor_source_for(sink)
-        if not monitor:
-            messagebox.showerror(
-                "Apply Routing", f"Could not find monitor for '{sink}'."
-            )
-            return
-        # Pre-validate: all targets must exist as sinks
-        sinks = {s["name"] for s in PactlRunner.list_sinks()}
-        for t in target_outputs:
-            if t not in sinks:
-                messagebox.showerror(
-                    "Apply Routing",
-                    f"Output '{t}' does not exist anymore. Hit Refresh "
-                    "and try again.",
-                )
-                return
-        # Idempotent apply — only add missing loopbacks
-        existing = {
-            lb["sink"] for lb in PactlRunner.list_loopbacks()
-            if lb.get("source") == monitor
-        }
-        added = []
-        for t in target_outputs:
-            if t in existing:
-                continue
-            try:
-                mod = PactlRunner.create_loopback(
-                    monitor, t,
-                    latency_msec=self.get_loopback_latency_ms(),
-                    logger=self.add_output,
-                )
-            except LoopbackCycleError as exc:
-                # One bad target must not abort the ones that are fine --
-                # multi-routing is a list of independent routes.
-                messagebox.showerror(
-                    "Would create a feedback loop",
-                    f"Routing '{sink}' to '{t}' would close this loop:\n\n"
-                    f"    {exc.render()}\n\n"
-                    "That target was skipped. Remove one of those routes "
-                    "on the Manage tab first.",
-                )
-                continue
-            if mod:
-                added.append(t)
-        if added:
-            self.add_output(
-                f"Quick route: routed '{sink}' to {', '.join(added)}"
-            )
-        else:
-            self.add_output(
-                f"Quick route: '{sink}' already routes to all selected "
-                f"outputs (no changes)"
-            )
-        self._refresh_quick_route_panel()
-        self.refresh_all_views()
-
-    def _on_quick_route_stop_all(self):
-        """Stop all loopbacks for the currently selected sink."""
-        sink = self._quick_route_sink_name
-        if not sink:
-            messagebox.showinfo(
-                "Stop All Routing",
-                "Select a virtual sink in the tree first.",
-            )
-            return
-        if not PactlRunner.is_null_sink(sink):
-            messagebox.showinfo(
-                "Stop All Routing",
-                f"'{sink}' is a hardware sink — nothing to stop.",
-            )
-            return
-        monitor = PactlRunner.monitor_source_for(sink)
-        if not monitor:
-            return
-        stopped = 0
-        for lb in PactlRunner.list_loopbacks():
-            if lb.get("source") == monitor:
-                if PactlRunner.unload_loopback(lb["id"], logger=self.add_output):
-                    stopped += 1
-        self.add_output(
-            f"Quick route: stopped {stopped} loopback(s) for '{sink}'"
-        )
-        self._refresh_quick_route_panel()
-        self.refresh_all_views()
 
     # ------------------------------------------------------------------
     # Routing panel methods (Phase 2: loopback support)
-    # ------------------------------------------------------------------
-
-    def update_routing_panel(self, sink_name):
-        """Populate the Routing panel for the selected sink (or reset it).
-
-        Called from on_unified_tree_select. Behavior:
-        - sink_name is None: reset the panel to placeholder state.
-        - sink_name is a hardware sink: disable the panel (hardware sinks
-          don't need loopback routing; they ARE the real outputs).
-        - sink_name is a null-sink (virtual): show current routing status
-          (if any), populate the output dropdown, enable Apply/Stop as
-          appropriate.
-        """
-        # Default: reset everything
-        self.routing_status_var.set("Select a virtual sink to route")
-        self.routing_output_combo.config(values=(), state="disabled")
-        self.route_button.config(state="disabled")
-        self.stop_route_button.config(state="disabled")
-        self._routing_sink_name = None
-
-        if sink_name is None:
-            return
-
-        # Hardware sinks: panel isn't useful (you can't "route to" a sink)
-        if not PactlRunner.is_null_sink(sink_name):
-            self.routing_status_var.set(
-                f"'{sink_name}' is a hardware sink — nothing to route"
-            )
-            return
-
-        # It's a virtual sink — populate the panel
-        self._routing_sink_name = sink_name
-        monitor = PactlRunner.monitor_source_for(sink_name)
-        loopbacks = PactlRunner.list_loopbacks()
-        current = next(
-            (lb for lb in loopbacks if lb.get("source") == monitor), None
-        )
-
-        # Refresh output dropdown
-        outputs = PactlRunner.list_hardware_outputs()
-        if not outputs:
-            self.routing_status_var.set(
-                f"No hardware output sinks available to route '{sink_name}' to"
-            )
-            return
-
-        self.routing_output_combo.config(values=outputs, state="readonly")
-        # Pre-select current target if there's an active loopback
-        if current and current.get("sink") in outputs:
-            self.routing_output_var.set(current["sink"])
-            self.routing_status_var.set(
-                f"Currently routing '{sink_name}' -> '{current['sink']}' "
-                f"(loopback module #{current['id']})"
-            )
-            self.route_button.config(state="normal")
-            self.stop_route_button.config(state="normal")
-        else:
-            # No active loopback. Default-select the first output.
-            self.routing_output_var.set(outputs[0])
-            self.routing_status_var.set(
-                f"'{sink_name}' is not currently routed"
-            )
-            self.route_button.config(state="normal")
-            self.stop_route_button.config(state="disabled")
-
-        # Populate the multi-output listbox and pre-check items that
-        # already have an active loopback from this sink's monitor.
-        # (There can be multiple loopbacks with the same source — the
-        # user can already have created them by other means.)
-        self.multi_routing_listbox.delete(0, tk.END)
-        for out in outputs:
-            self.multi_routing_listbox.insert(tk.END, out)
-        # Find all loopbacks from this sink's monitor
-        active_targets: set[str] = set()
-        for lb in loopbacks:
-            if lb.get("source") != monitor:
-                continue
-            sink = lb.get("sink")
-            if sink:
-                active_targets.add(sink)
-        self._multi_routed_targets = sorted(active_targets)
-        # Pre-check active targets in the listbox
-        for idx, out in enumerate(outputs):
-            if out in active_targets:
-                self.multi_routing_listbox.selection_set(idx)
-        # Enable/disable multi-routing buttons
-        if outputs:
-            self.multi_apply_button.config(state="normal")
-            self.multi_stop_all_button.config(
-                state="normal" if active_targets else "disabled"
-            )
-
-    # ------------------------------------------------------------------
-    # Device controls (Phase 4: volume + mute + set-as-default)
     # ------------------------------------------------------------------
 
     def _build_device_controls(self, parent):
@@ -3334,80 +3435,6 @@ class MainWindow:
             self._device_controls_sink_name,
             is_source=self._device_controls_is_source,
         )
-
-    def apply_routing(self):
-        """Create (or replace) a loopback from the selected sink to the chosen output."""
-        sink_name = getattr(self, "_routing_sink_name", None)
-        if not sink_name:
-            return
-
-        target = self.routing_output_var.get().strip()
-        if not target:
-            messagebox.showerror("Routing error", "Pick a hardware output to route to")
-            return
-
-        monitor = PactlRunner.monitor_source_for(sink_name)
-        if monitor is None:
-            messagebox.showerror("Routing error", f"Cannot derive monitor source for '{sink_name}'")
-            return
-        # If there's an existing loopback from this sink's monitor, remove it first
-        # so we don't end up with two loopbacks stacking audio.
-        for lb in PactlRunner.list_loopbacks():
-            if lb.get("source") == monitor:
-                PactlRunner.unload_loopback(lb["id"])
-
-        lb_id = None
-        try:
-            lb_id = PactlRunner.create_loopback(
-                monitor, target, latency_msec=self.get_loopback_latency_ms(),
-                logger=self.add_output,
-            )
-        except LoopbackCycleError as exc:
-            messagebox.showerror(
-                "Would create a feedback loop",
-                f"Routing '{sink_name}' to '{target}' would close this loop:\n\n"
-                f"    {exc.render()}\n\n"
-                "Remove one of those routes first.",
-            )
-            return
-        if lb_id is None:
-            self.add_output(f"Failed to create loopback from {monitor} to {target}")
-            messagebox.showerror("Routing error", "pactl refused the loopback command")
-            return
-
-        self.add_output(
-            f"Routing '{sink_name}' -> '{target}' (loopback module #{lb_id})"
-        )
-        self.status_var.set(f"Routed '{sink_name}' -> '{target}'")
-        self.refresh_all_views()
-        # Re-select the same sink to refresh the routing panel state
-        self._reselect_after_refresh(sink_name)
-
-    def stop_routing(self):
-        """Unload the active loopback for the selected sink."""
-        sink_name = getattr(self, "_routing_sink_name", None)
-        if not sink_name:
-            return
-
-        monitor = PactlRunner.monitor_source_for(sink_name)
-        if monitor is None:
-            return
-        loopbacks = PactlRunner.list_loopbacks()
-        ours = [lb for lb in loopbacks if lb.get("source") == monitor]
-        if not ours:
-            messagebox.showinfo("Routing", f"'{sink_name}' is not currently routed")
-            return
-
-        for lb in ours:
-            ok = PactlRunner.unload_loopback(lb["id"])
-            if ok:
-                self.add_output(f"Stopped routing '{sink_name}' (unloaded #{lb['id']})")
-            else:
-                self.add_output(f"Failed to unload loopback #{lb['id']}")
-
-        self.status_var.set(f"Stopped routing '{sink_name}'")
-        self.refresh_all_views()
-        self._reselect_after_refresh(sink_name)
 
     def apply_multi_routing(self):
         """Route the selected virtual sink to every checked hardware output.
@@ -4077,7 +4104,15 @@ class MainWindow:
         else:
             name = raw_name.replace(" (auto)", "")
 
-        channels = self.channels_var.get() or "2"
+        # The preview must show what would really be created, including a
+        # custom channel count. An invalid value is shown as-is rather than
+        # silently previewing a different sink than the one that gets made.
+        try:
+            channels = str(self._effective_channels())
+        except ValueError:
+            channels = self.channels_var.get() or "2"
+            if self.channels_var.get() == "Custom":
+                channels = self.channels_custom_var.get() or "?"
 
         # Pick media.class based on the selected device type
         device_type = (
@@ -4100,8 +4135,8 @@ class MainWindow:
         # Add advanced options if they are set and advanced options are shown
         if hasattr(self, 'show_advanced_var') and self.show_advanced_var.get():
             # Sample rate
-            rate = self.rate_var.get().strip()
-            if rate and rate != "44100":  # Only add if different from default
+            rate = self._explicit_rate()
+            if rate is not None:
                 cmd_parts.append(f"rate={rate}")
 
             # Sample format - get the actual format code from the description
@@ -4144,7 +4179,8 @@ class MainWindow:
                 if layout == "__custom__":
                     # Show the custom entry
                     self.channel_map_custom_entry.grid(
-                        row=4, column=1, sticky=(tk.W, tk.E), padx=5, pady=5
+                        row=4 + getattr(self, "_advanced_row_offset", 0),
+                        column=1, sticky=(tk.W, tk.E), padx=5, pady=5
                     )
                 else:
                     # Hide the custom entry (if visible)
@@ -4198,7 +4234,8 @@ class MainWindow:
                     except AttributeError:
                         self.latency_var.set("50")
                     self.latency_custom_entry.grid(
-                        row=8, column=1, sticky=tk.W, padx=5, pady=5
+                        row=8 + getattr(self, "_advanced_row_offset", 0),
+                        column=1, sticky=tk.W, padx=5, pady=5
                     )
                 else:
                     self.latency_custom_entry.grid_remove()
@@ -4310,8 +4347,20 @@ class MainWindow:
         preset_data = self.preset_manager.get_preset(selected_preset)
 
         if preset_data:
-            # Load preset configuration
-            self.channels_var.set(preset_data.get("channels", "2"))
+            # Load preset configuration. A stored channel count that is not
+            # one of the suggestions has to come back as "Custom" with the
+            # number in the custom field -- otherwise the dropdown would
+            # show a value that is not in its own list, and the count
+            # would be lost on the next save.
+            stored_channels = str(preset_data.get("channels", "2"))
+            if stored_channels in ("1", "2", "4", "6", "8"):
+                self.channels_var.set(stored_channels)
+                self.channels_custom_var.set("")
+                self._show_custom_channels_field(False)
+            else:
+                self.channels_var.set("Custom")
+                self.channels_custom_var.set(stored_channels)
+                self._show_custom_channels_field(True)
             self.channel_map_var.set(preset_data.get("channel_map", ""))
 
             # Update placeholder text for sink name if user hasn't customized it
@@ -4342,8 +4391,14 @@ class MainWindow:
 
                 auto_name = self._get_available_name(base_name)
                 self.sink_name_var.set(f"{auto_name} (auto)")
-                # Ensure placeholder styling
-                self.sink_name_entry.config(foreground="gray")
+                # No grey styling here. The field no longer holds
+                # placeholder text of its own -- the placeholder is a
+                # separate label beside it, and the " (auto)" value is
+                # stripped back to empty by the trace. Setting the
+                # foreground to grey here ran AFTER that trace, so the
+                # field ended up empty AND grey, and everything the
+                # user then typed came out grey too.
+                self._set_name_field_normal()
 
             # Update description if user hasn't customized it
             current_desc = self.sink_desc_var.get()
@@ -4363,8 +4418,31 @@ class MainWindow:
                 # Sample rate
                 if "rate" in preset_data:
                     self.rate_var.set(str(preset_data["rate"]))
-                else:
-                    self.rate_var.set("44100")
+                elif not getattr(self, "_rate_user_set", False):
+                    # The hardware's rate, NOT a hardcoded 44100.
+                    #
+                    # This used to write 44100, which had two effects
+                    # beyond the obvious one. It made the rate briefly
+                    # wrong, and it made everything DERIVED from the
+                    # rate wrong too: the Loopback Latency "Auto"
+                    # recommendation is computed from the sample rate,
+                    # so the app opened showing "Auto - 46 ms
+                    # (recommended for 44kHz)" on a 48kHz machine --
+                    # with the rate field itself correctly reading
+                    # 48000. The label never recovered, because the
+                    # restore-to-detected-rate trace and the latency
+                    # trace were both fighting over the same variable.
+                    #
+                    # Writing the detected rate directly removes the
+                    # transient entirely, so there is nothing to recover
+                    # from.
+                    #
+                    # But only when the user has NOT chosen a rate
+                    # themselves. A preset that carries its own rate
+                    # still applies that; a preset that does not must
+                    # not silently discard the user's own choice.
+                    self.rate_var.set(
+                        getattr(self, "_detected_rate", "48000"))
 
                 # Sample format
                 if "format" in preset_data:
@@ -4459,7 +4537,7 @@ class MainWindow:
             # Remove the (auto) suffix and change color to normal
             actual_name = current_value.replace(" (auto)", "")
             self.sink_name_var.set(actual_name)
-            self.sink_name_entry.config(foreground="black")
+            self._set_name_field_normal()
             # Select all text for easy replacement
             self.sink_name_entry.select_range(0, tk.END)
 
@@ -4479,19 +4557,23 @@ class MainWindow:
             if not is_likely_auto:
                 # User has entered truly custom content
                 self.user_has_custom_name = True
-                self.sink_name_entry.config(foreground="black")
-            else:
-                # Might be auto-generated, keep auto mode but ensure proper styling
-                self.sink_name_entry.config(foreground="black")
+            # Either way the text in the field is the user's, so it is
+            # normal colour. The field no longer holds grey placeholder
+            # text of its own.
+            self._set_name_field_normal()
 
     def on_name_key_press(self, event):
         """Handle key press event for the sink name entry."""
+        # Whatever the user types is their text, so it is always
+        # normal colour. Previously the colour was only fixed up
+        # when the value carried the " (auto)" suffix, so text typed
+        # into a field that had been left grey came out grey.
+        self._set_name_field_normal()
         current_value = self.sink_name_var.get()
         if current_value.endswith(" (auto)"):
             # User is typing, remove auto suffix and mark as custom
             actual_name = current_value.replace(" (auto)", "")
             self.sink_name_var.set(actual_name)
-            self.sink_name_entry.config(foreground="black")
             self.user_has_custom_name = True
             # Position cursor at the end
             self.sink_name_entry.icursor(tk.END)
@@ -4536,7 +4618,7 @@ class MainWindow:
 
         # If the name looks auto-generated, ensure proper placeholder styling
         if current_name and current_name.endswith(" (auto)"):
-            self.sink_name_entry.config(foreground="gray")
+            self._set_name_field_normal()
         elif not current_name or not self.user_has_custom_name:
             # Reset to auto-naming if field is empty or not customized
             self.user_has_custom_name = False
@@ -4564,18 +4646,29 @@ class MainWindow:
             messagebox.showerror("Error", f"Cannot overwrite builtin preset: {preset_name}")
             return
 
-        # Collect current configuration
+        # Collect current configuration. The channel count is stored as the
+        # number that will actually be used, not as the dropdown label --
+        # "Custom" on its own would lose the count entirely.
+        try:
+            saved_channels = str(self._effective_channels())
+        except ValueError as exc:
+            messagebox.showerror("Error", str(exc))
+            return
+
         preset_data = {
-            "channels": self.channels_var.get(),
+            "channels": saved_channels,
             "channel_map": self.channel_map_var.get(),
             "description": self.sink_desc_var.get() or f"{preset_name} Virtual Device"
         }
 
         # Add advanced options if they are set
         if hasattr(self, 'show_advanced_var') and self.show_advanced_var.get():
-            rate = self.rate_var.get().strip()
-            if rate and rate != "44100":
-                preset_data["rate"] = rate
+            rate = self._explicit_rate()
+            if rate is not None:
+                # Stored as a string: it is read back from the combobox,
+                # which holds strings, and round-tripping it through an
+                # int would change the preset file's shape.
+                preset_data["rate"] = str(rate)
 
             format_desc = self.format_var.get().strip()
             if format_desc and hasattr(self, 'format_mappings'):

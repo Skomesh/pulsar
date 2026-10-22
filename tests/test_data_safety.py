@@ -21,6 +21,8 @@ Found by review, three related defects in how the managers persist JSON:
 Every test here uses its own XDG_DATA_HOME under a temp dir.
 """
 
+import contextlib
+import io
 import json
 import os
 import stat
@@ -120,29 +122,77 @@ class TestFailedWritePreservesData(DataDirTestCase):
 
 
 class TestCorruptFileIsNotSilentlyDestroyed(DataDirTestCase):
-    def test_a_corrupt_file_is_not_overwritten_by_the_next_save(self):
+    def _corrupt(self):
         path = self.seed_preset_file({"Existing": {"channels": "2"}})
         with open(path, "w") as fh:
             fh.write("{ this is not json")
+        return path
 
+    def test_a_corrupt_file_is_reported_not_silently_ignored(self):
+        """Silently dropping the user's data is worse than crashing.
+
+        The loader used to print `Error loading presets: ...`; replacing
+        it with a bare read_json_dict dropped that, so a corrupt file
+        vanished from the list with nothing said at all.
+        """
+        self._corrupt()
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(buf):
+            PresetManager().get_preset_names()
+        said = buf.getvalue()
+        self.assertIn("WARNING", said,
+                      "the broken file was not flagged to the user")
+
+    def test_the_path_is_in_the_report_so_the_file_can_be_found(self):
+        """The user has to be able to find it. This is the fix for 'unsure
+        where the profiles are saved'."""
+        path = self._corrupt()
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(buf):
+            PresetManager().get_preset_names()
+        self.assertIn(str(path), buf.getvalue(),
+                      "the report does not say WHICH file is broken")
+
+    def test_the_original_contents_are_recoverable_after_a_save(self):
+        """THE contract: a save must never destroy unreadable data.
+
+        Two acceptable routes, and the test permits only these:
+          * the save refuses, leaving the file untouched, or
+          * the save moves the broken file aside first, then writes.
+        What is NOT acceptable is overwriting it -- which is what happened
+        until user testing caught it, and what an earlier version of this
+        test permitted because it accepted either outcome.
+
+        Checked by asserting on the BYTES, not on the return value: the
+        return value is an implementation detail, the surviving data is
+        the promise.
+        """
+        self._corrupt()
         pm = PresetManager()
-        pm.get_preset_names()  # must not raise
+        pm.get_preset_names()
+        pm.save_preset("New", {"channels": "2"})
 
-        # Loading must not have quietly emptied anything.
-        with open(path) as fh:
-            still_corrupt = fh.read()
-        self.assertIn("this is not json", still_corrupt,
-                      "reading a corrupt file rewrote it")
+        presets_dir = os.path.join(self.data_home, "pulsar", "presets")
+        survivors = [
+            name for name in os.listdir(presets_dir)
+            if os.path.isfile(os.path.join(presets_dir, name))
+            and "this is not json" in open(os.path.join(presets_dir, name)).read()
+        ]
+        self.assertTrue(
+            survivors,
+            f"the corrupt data was destroyed; {presets_dir} now holds "
+            f"{sorted(os.listdir(presets_dir))}")
 
-        # And saving must not report success while destroying the only copy.
-        ok = pm.save_preset("New", {"channels": "2"})
-        with open(path) as fh:
-            after = fh.read()
-        if ok:
-            self.assertNotEqual(after, still_corrupt)
-        else:
-            self.assertEqual(after, still_corrupt,
-                             "a refused save must not modify the file")
+    def test_the_app_is_usable_after_a_corrupt_file(self):
+        """Quarantine must leave a working app, not a wedged one."""
+        self._corrupt()
+        pm = PresetManager()
+        pm.get_preset_names()
+        pm.save_preset("New", {"channels": "2"})
+        # These must not raise, and the new preset must be listed.
+        names = pm.get_preset_names()
+        self.assertIn("New", names)
+        self.assertIsNotNone(pm.get_preset("New"))
 
 
 class TestHostileShapes(DataDirTestCase):

@@ -430,9 +430,9 @@ def cmd_mute(args) -> int:
 def resolve_profile(name: str) -> Optional[Dict[str, Any]]:
     """Look a profile up by name, case-insensitively, or return None.
 
-    Profile names are long and human ("Stereo split (apps + voice)"), so
-    `profile apply stereo` should find the one called "Stereo" rather than
-    insist on the full string.
+    Profile names are long and human ("Apps + Voice Split"), so
+    `profile apply apps` should find the one called "Apps + Voice
+    Split" rather than insist on the full string.
     """
     manager = ProfileManager()
     if name in manager.get_profile_names():

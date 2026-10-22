@@ -2,6 +2,13 @@ name: Release
 
 # Builds every distributable format and attaches them to a GitHub release.
 #
+# EVERY FORMAT LANDS IN ./dist/ -- locally and here. That is the one
+# convention the whole workflow depends on: the upload step below globs
+# dist/*, so a build step that writes anywhere else produces a release with
+# no artifact and no error. Each format's step therefore ends by leaving a
+# file in dist/, and build_deb.sh / build_rpm.sh exist precisely so CI and
+# a local build produce the same filenames in the same place.
+#
 # Triggered by pushing a v* tag. Every artifact ends up as a file on the
 # GitHub release and nowhere else: there is deliberately no publishing to the
 # snap store, Flathub, an apt repository or a yum repository. Users install
@@ -102,10 +109,11 @@ jobs:
           # debhelper expects the changelog version to match, and it is the
           # authority for the .deb version -- not the tag.
           head -1 debian/changelog
-          dpkg-buildpackage -us -uc -b --no-sign
-          mkdir -p dist/
-          cp ../pulsar_*.deb dist/ || ls -la ../
-          ls -la dist/
+          # build_deb.sh, not a bare dpkg-buildpackage: dpkg-buildpackage
+          # writes to the PARENT of the source tree, which is invisible to
+          # `ls` in the checkout and is why nobody can find the deb. The
+          # wrapper moves it to dist/ and deletes the parent copy.
+          ./scripts/build_deb.sh --version "${{ steps.ver.outputs.tag }}"
 
       - name: Lint deb
         if: matrix.format == 'deb'
@@ -120,13 +128,10 @@ jobs:
           # Fedora ships the python3-devel headers needed by %py3_build.
           sudo dnf install -y rpm-build python3-devel python3-pip \
             desktop-file-utils
-          mkdir -p dist
-          rpmbuild -ta \
-            --define "_topdir $PWD/rpmbuild" \
-            --define "_version ${{ steps.ver.outputs.tag }}" \
-            pulsar.spec
-          find rpmbuild/RPMS -name '*.rpm' -exec cp {} dist/ \;
-          ls -la dist/
+          # Same reason as the deb: rpmbuild writes into its _topdir
+          # (scratch), not into an output directory. The wrapper copies the
+          # finished .rpm from _topdir/RPMS into dist/.
+          ./scripts/build_rpm.sh --version "${{ steps.ver.outputs.tag }}"
 
       # --- Flatpak --------------------------------------------------------
       - name: Build flatpak
@@ -144,7 +149,12 @@ jobs:
           flatpak-builder --user --install --force-clean \
             build-dir packaging/flatpak/pulsar.yml
           flatpak build-export repo build-dir
-          flatpak build-bundle repo dist/pulsar.flatpak \
+          # build-bundle will not create dist/ for you, and a bare
+          # pulsar.flatpak in a directory of versioned files is the file
+          # nobody can identify later.
+          mkdir -p dist
+          flatpak build-bundle repo \
+            "dist/pulsar-${{ steps.ver.outputs.tag }}.flatpak" \
             org.skomesh.Pulsar "${{ steps.ver.outputs.tag }}"
           ls -la dist/
 
@@ -154,7 +164,19 @@ jobs:
         run: |
           set -euo pipefail
           sudo snap install snapcraft --classic
+          # snapcraft.yaml carries 0.0.0-PLACEHOLDER because pyproject.toml
+          # is the single source of truth for the version. Substitute it
+          # before building, or the artifact is literally named after the
+          # placeholder. Assert the substitution happened rather than
+          # trusting the sed -- a silent miss here ships a 0.0.0 snap.
+          sed -i \
+            's|^version: "0.0.0-PLACEHOLDER"|version: "${{ steps.ver.outputs.tag }}"|' \
+            packaging/snap/snapcraft.yaml
+          grep -q 'version: "${{ steps.ver.outputs.tag }}"$' \
+            packaging/snap/snapcraft.yaml \
+            || { echo "::error::snap version substitution did not apply"; exit 1; }
           snapcraft --destructive-mode
+          # snapcraft drops the .snap in the cwd; dist/ is where it belongs.
           mkdir -p dist
           cp ./*.snap dist/
           ls -la dist/

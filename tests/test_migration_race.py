@@ -106,6 +106,9 @@ class TestPresetManagerFirst(MigrationRaceTestCase):
         self.assertIn("Work Setup", pm.get_profile_names(),
                       "profiles were silently lost by the preset manager "
                       "consuming the legacy file")
+        # The list is exactly what the user saved. Nothing else is merged
+        # in, so a migration can neither lose nor invent an entry.
+        self.assertEqual(pm.get_profile_names(), ["Work Setup"])
 
     def test_the_preset_file_does_not_contain_profiles(self):
         from pulsar.utils.preset_manager import PresetManager
@@ -155,6 +158,8 @@ class TestProfileManagerFirst(MigrationRaceTestCase):
         self.assertNotIn("presets", names)
         self.assertNotIn("profiles", names)
         self.assertIn("Work Setup", names)
+        # Exactly the migrated profile: no wrapper key and nothing else.
+        self.assertEqual(names, ["Work Setup"])
 
 
 class TestFlatLegacyShape(MigrationRaceTestCase):

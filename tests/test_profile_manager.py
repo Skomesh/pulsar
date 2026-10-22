@@ -70,14 +70,27 @@ class TestMigration(unittest.TestCase):
         v1 = {
             "channels": "2",
             "channel_map": "front-left,front-right",
-            "description": "Stereo",
-            "builtin": True,
+            "description": "Legacy two channel",
         }
-        out = ProfileManager.migrate_entry("Stereo", v1)
+        out = ProfileManager.migrate_entry("LegacyTwo", v1)
         self.assertEqual(out["schema_version"], CURRENT_SCHEMA_VERSION)
         self.assertEqual(out["devices"], [])
         self.assertEqual(out["routing"], [])
         self.assertIn("Migrated from v1", out["description"])
+
+    def test_v1_entry_does_not_carry_a_builtin_flag(self):
+        """The v1 format had a "builtin" flag. Nothing reads it any more.
+
+        A legacy file on disk still has the key, so the migration has to
+        drop it rather than write it into a v2 profile.
+        """
+        v1 = {
+            "channels": "2",
+            "description": "Legacy two channel",
+            "builtin": True,
+        }
+        out = ProfileManager.migrate_entry("LegacyTwo", v1)
+        self.assertNotIn("builtin", out)
 
     def test_v2_entry_passes_through(self):
         v2 = {
@@ -99,37 +112,55 @@ class TestMigration(unittest.TestCase):
         out = ProfileManager.migrate_entry("X", v2_shaped)
         self.assertEqual(out["schema_version"], CURRENT_SCHEMA_VERSION)
 
+    def test_v2_entry_drops_a_stale_builtin_flag(self):
+        """A v2 file written before the built-ins were removed still has it."""
+        v2 = {
+            "schema_version": 2,
+            "devices": [],
+            "routing": [],
+            "builtin": True,
+        }
+        out = ProfileManager.migrate_entry("Legacy", v2)
+        self.assertNotIn("builtin", out)
+
     def test_load_all_profiles_migrates_v1_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             pm = ProfileManager(presets_dir=tmp)
             # Write a v1 file with user profile names
             pm._save_raw({
-                "Stereo": {"channels": "2", "builtin": True},
-                "MyCustom": {"channels": "6", "builtin": False},
+                "LegacyTwo": {"channels": "2"},
+                "MyCustom": {"channels": "6"},
             })
-            # load_all_profiles now merges in built-ins too — we should
-            # see 2 (user) + 3 (built-ins) = 5 total.
             loaded = pm.load_all_profiles()
-            self.assertEqual(len(loaded), 5)
+            # Exactly the two user entries: the manager adds nothing of
+            # its own to the list any more.
+            self.assertEqual(set(loaded), {"LegacyTwo", "MyCustom"})
             # The user v1 entries were migrated to v2
-            self.assertEqual(loaded["Stereo"]["schema_version"], 2)
+            self.assertEqual(loaded["LegacyTwo"]["schema_version"], 2)
             self.assertEqual(loaded["MyCustom"]["schema_version"], 2)
-            self.assertEqual(loaded["Stereo"]["devices"], [])
-            # The built-ins are present (3 generic profiles now)
-            self.assertIn("Headphones (single output)", loaded)
-            self.assertIn("Per-application routing (4 channels)", loaded)
-            self.assertIn("Stereo split (apps + voice)", loaded)
-            self.assertEqual(pm.is_shadowed_by_user("Gaming"), False)
-            # Save user "Gaming" and verify shadow works
-            pm.save_profile("Gaming", {"devices": [], "routing": []})
-            self.assertEqual(pm.is_shadowed_by_user("Gaming"), True)
-            loaded = pm.load_all_profiles()
-            # Shadowed Gaming is now the user's (empty) version
-            self.assertEqual(loaded["Gaming"]["devices"], [])
-            # Other built-ins still load (now generic names)
-            self.assertIn("Headphones (single output)", loaded)
-            self.assertIn("Per-application routing (4 channels)", loaded)
-            self.assertIn("Stereo split (apps + voice)", loaded)
+            self.assertEqual(loaded["LegacyTwo"]["devices"], [])
+
+
+class TestNoDefaultProfiles(unittest.TestCase):
+    """Pulsar ships no default profiles. The list is only what the user saved.
+
+    There used to be three built-in profiles merged in under every user's
+    list. They are gone, so a fresh install starts with an empty profile
+    list and a saved profile is the only thing in it.
+    """
+
+    def test_a_fresh_install_has_no_profiles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pm = ProfileManager(presets_dir=tmp)
+            self.assertEqual(pm.load_all_profiles(), {})
+            self.assertEqual(pm.get_profile_names(), [])
+
+    def test_a_saved_profile_is_the_only_entry_in_the_list(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pm = ProfileManager(presets_dir=tmp)
+            pm.save_profile("Mine", {"devices": [], "routing": []})
+            self.assertEqual(pm.get_profile_names(), ["Mine"])
+            self.assertEqual(set(pm.load_all_profiles()), {"Mine"})
 
 class TestDefaultSinkSentinel(unittest.TestCase):
     """Validation and substitution of the <AUTO_DEFAULT> sentinel.

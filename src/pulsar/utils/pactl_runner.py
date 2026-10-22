@@ -623,7 +623,12 @@ class PactlRunner:
         Args:
             media_class: One of 'Audio/Sink', 'Audio/Source', or 'Audio/Duplex'.
             name: Sink identifier.
-            description: Human-readable description (unused in command, kept for API compat).
+            description: Human-readable description. Passed to PulseAudio
+                as ``device.description`` in sink_properties, so it shows up
+                in `pactl list sinks`. Previously documented as 'unused in
+                command' and genuinely dropped, which is why the GUI's
+                Description field appeared to do nothing -- see issue on
+                user testing feedback.
             channels: Number of channels.
             rate: Sample rate in Hz (optional).
             format: Sample format (optional).
@@ -657,9 +662,32 @@ class PactlRunner:
         # caller passed and cannot be stripped by it. Merged into the
         # caller's own properties rather than replacing them: a device
         # carrying `device.api=game` still needs that key.
-        cmd_args.append(
-            f'sink_properties={PactlRunner._with_managed_property(sink_properties)}'
-        )
+        properties = PactlRunner._with_managed_property(sink_properties)
+
+        # The description reaches PulseAudio as device.description, which is
+        # what makes it show up in `pactl list sinks`. It used to be
+        # accepted and dropped, so the GUI's Description field appeared to
+        # do nothing.
+        #
+        # Spaces are NOT representable. PulseAudio's sink_properties parser
+        # splits on whitespace with no quoting and no escaping -- measured
+        # on a live server:
+        #
+        #     device.description=My Rig        -> Description: My
+        #     device.description='My Rig'      -> Description: My
+        #     device.description="My Rig"      -> Description: My
+        #     device.description=Game\ Output  -> Description: Game
+        #
+        # So a multi-word description is silently truncated at the first
+        # space, which is worse than not setting it. Underscores survive,
+        # and PulseAudio itself writes underscores in device names, so it
+        # is the least surprising substitute available.
+        if description and "device.description" not in properties:
+            safe = "_".join(str(description).split())
+            if safe:
+                properties = f"device.description={safe} {properties}"
+
+        cmd_args.append(f"sink_properties={properties}")
 
         output, return_code = PactlRunner.run_command(cmd_args, logger)
 
@@ -966,6 +994,62 @@ class PactlRunner:
                         entry[key] = value
             loopbacks.append(entry)
         return loopbacks
+
+    @staticmethod
+    def unload_null_sink_by_name(sink_name, require_managed=True, logger=None) -> bool:
+        """Unload the null-sink with this name, found fresh by identity.
+
+        Never trust a module id captured earlier.
+
+        PipeWire REUSES module ids once they are freed. Observed in a
+        single test run: id 536870920 belonged to `cap_opt`, then to
+        `cap_dup`, then to `cap_lb`, then to `cap_sink`, then to
+        `cap_src`. An id recorded at creation time therefore points at a
+        completely different module by the time it is used, and
+        unloading it removes the wrong thing.
+
+        It did, in practice: unloading a stale id removed
+        module-always-sink, and with it the machine's default output --
+        the user's speakers disappeared mid-test-session.
+
+        So the module is looked up by what it IS -- its sink_name -- and
+        its current id is read at that moment. The ownership marker is
+        still required by default, so this cannot be used to remove a
+        sink this program did not create.
+        """
+        modules = PactlRunner.list_modules(logger)
+        for m in modules:
+            if m.get("name") != "module-null-sink":
+                continue
+            if f"sink_name={sink_name}" not in set(m.get("argument", "").split()):
+                continue
+            if require_managed and not PactlRunner._is_managed_module(m):
+                continue
+            mod_id = m.get("id")
+            if not mod_id:
+                continue
+            return PactlRunner.unload_module(mod_id, logger)
+        return False
+
+    @staticmethod
+    def unload_loopback_by_endpoints(source, sink, logger=None) -> bool:
+        """Unload the loopback routing source -> sink, found fresh.
+
+        The same id-reuse hazard as unload_null_sink_by_name. A loopback
+        is identified by its two endpoints, which are stable, rather than
+        by a module id that may since have been reused.
+        """
+        modules = PactlRunner.list_modules(logger)
+        for m in modules:
+            if m.get("name") != "module-loopback":
+                continue
+            tokens = set(m.get("argument", "").split())
+            if f"source={source}" in tokens and f"sink={sink}" in tokens:
+                mod_id = m.get("id")
+                if not mod_id:
+                    continue
+                return PactlRunner.unload_module(mod_id, logger)
+        return False
 
     @staticmethod
     def unload_loopback(module_id: str, logger=None) -> bool:

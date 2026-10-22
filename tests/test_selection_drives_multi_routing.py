@@ -21,6 +21,7 @@ import os
 import time
 import tkinter as tk
 import unittest
+from tkinter import ttk
 from unittest import mock
 
 from pulsar.utils.pactl_runner import PactlRunner
@@ -106,6 +107,85 @@ class TestSelectionFeedsMultiRouting(unittest.TestCase):
             self.assertFalse(
                 hasattr(self.app, attr),
                 f"{attr} should have been removed with the panel")
+
+    def test_the_duplicate_quick_route_panel_is_gone(self):
+        """Two multi-output panels, found in user testing.
+
+        'Route Selected Sink' at the top of the Manage tab was already a
+        multi-output panel, not the single-output one that was removed
+        earlier. It did the same job as 'Multi-output Routing' on a
+        different attribute, and the user reported seeing both.
+
+        Every attribute of the removed panel is asserted gone, because a
+        partially-removed panel is how you get a tab with two of
+        something.
+        """
+        for attr in ("quick_route_listbox", "quick_route_status_var",
+                     "_quick_route_outputs", "_quick_route_sink_name"):
+            self.assertFalse(
+                hasattr(self.app, attr),
+                f"{attr} should have been removed with the duplicate panel")
+
+    def test_the_duplicate_panel_handlers_are_really_gone(self):
+        for method in ("_on_quick_route_apply", "_on_quick_route_stop_all",
+                       "_refresh_quick_route_outputs", "_refresh_quick_route_panel"):
+            self.assertFalse(
+                hasattr(self.app, method),
+                f"{method} should have been removed with the duplicate panel")
+
+    def test_only_one_routing_panel_remains(self):
+        """Count the routing panels that actually exist.
+
+        A frame-title scan is the only way to catch a duplicate panel:
+        both were titled differently and both were functional, so nothing
+        else would have flagged it.
+
+        Measured by the routing CONTROLS, not by the title. An earlier
+        version of this test filtered frame titles on the substring
+        "Routing" -- and the duplicate was titled "Route Selected Sink",
+        which does not contain that substring. The test passed with a
+        duplicate panel injected. It would have passed with the original
+        bug still in place, which is worse than no test at all.
+
+        So: find every button and listbox that performs routing, group
+        them by the frame that holds them, and require exactly one group.
+        """
+        groups = {}
+
+        def walk(widget):
+            for child in widget.winfo_children():
+                label = None
+                try:
+                    label = str(child.cget("text"))
+                except Exception:
+                    label = None
+                is_routing_control = (
+                    isinstance(child, (ttk.Button, tk.Listbox))
+                    and label is not None
+                    and "routing" in label.lower()
+                )
+                if is_routing_control:
+                    groups.setdefault(id(child.master), []).append(label)
+                walk(child)
+
+        walk(self.root)
+        self.assertEqual(
+            len(groups), 1,
+            f"expected exactly one routing panel, found {len(groups)}: "
+            f"{list(groups.values())}")
+
+    def test_no_frame_is_titled_route_selected_sink(self):
+        """The removed panel's title must not exist anywhere."""
+        titles = []
+
+        def walk(widget):
+            for child in widget.winfo_children():
+                if isinstance(child, ttk.LabelFrame):
+                    titles.append(str(child.cget("text")))
+                walk(child)
+
+        walk(self.root)
+        self.assertNotIn("Route Selected Sink", titles)
 
     def test_the_deleted_handlers_are_really_gone(self):
         for method in ("apply_routing", "stop_routing", "update_routing_panel"):

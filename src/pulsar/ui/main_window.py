@@ -857,63 +857,6 @@ class MainWindow:
         )
         self.data_path_entry.pack(fill=tk.X)
 
-        # --- Quick Routing Panel (always visible) ---
-        # Prominent, prominent panel at the TOP so users immediately
-        # see how to route a selected virtual sink to hardware outputs.
-        # The tree below is where they pick what to route.
-        quick_route_frame = ttk.LabelFrame(
-            frame, text="Route Selected Sink", padding="10"
-        )
-        quick_route_frame.pack(fill=tk.X, padx=0, pady=(0, 10))
-        # Status line
-        self.quick_route_status_var = tk.StringVar(
-            value="Select a virtual sink below, then check the outputs you "
-                  "want its audio to play through, then click 'Apply Routing'."
-        )
-        ttk.Label(
-            quick_route_frame,
-            textvariable=self.quick_route_status_var,
-            wraplength=600, font=("", 9),
-        ).pack(anchor=tk.W, pady=(0, 5))
-        # Checkbox list of hardware outputs
-        self.quick_route_listbox_frame = ttk.Frame(quick_route_frame)
-        self.quick_route_listbox_frame.pack(fill=tk.X, pady=(0, 5))
-        self.quick_route_listbox = tk.Listbox(
-            self.quick_route_listbox_frame,
-            height=4,
-            selectmode=tk.EXTENDED,
-            exportselection=False,
-            font=("", 9),
-        )
-        self.quick_route_listbox.pack(
-            side=tk.LEFT, fill=tk.BOTH, expand=True
-        )
-        qr_scroll = ttk.Scrollbar(
-            self.quick_route_listbox_frame, orient=tk.VERTICAL,
-            command=self.quick_route_listbox.yview,
-        )
-        qr_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        self.quick_route_listbox.configure(yscrollcommand=qr_scroll.set)
-        # Buttons
-        qr_buttons = ttk.Frame(quick_route_frame)
-        qr_buttons.pack(fill=tk.X)
-        ttk.Button(
-            qr_buttons, text="Apply Routing",
-            command=self._on_quick_route_apply, width=15,
-        ).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(
-            qr_buttons, text="Stop All Routing",
-            command=self._on_quick_route_stop_all, width=15,
-        ).pack(side=tk.LEFT, padx=5)
-        ttk.Button(
-            qr_buttons, text="Refresh Outputs",
-            command=self._refresh_quick_route_outputs, width=15,
-        ).pack(side=tk.LEFT, padx=5)
-        # State for the quick route panel
-        self._quick_route_outputs: List[str] = []
-        self._quick_route_sink_name: Optional[str] = None
-        # Initial population of the output list
-        self._refresh_quick_route_outputs()
 
         # Add Show System Modules checkbox
         self.show_system_var = tk.BooleanVar(value=False)
@@ -1026,23 +969,37 @@ class MainWindow:
         # apply_routing, stop_routing and update_routing_panel. The Manage tab
         # offered two overlapping ways to do the same thing and there was no
         # way for a user to tell which one was the real one.
-        self.routing_frame = ttk.LabelFrame(frame, text="Routing")
-        self.routing_frame.pack(fill=tk.X, pady=5)  # matches button_frame
-        self.routing_frame.columnconfigure(1, weight=1)
-
-        # --- Multi-output routing (Phase 5b) ----------------------------
+        #
+        # A SECOND duplicate then turned up in user testing: the "Route
+        # Selected Sink" panel at the top of the tab was already a
+        # multi-output panel, not a single-output one. It and this one did
+        # the same job on different attributes (_quick_route_sink_name vs
+        # _routing_sink_name), and the user reported seeing both. The user
+        # chose to keep this one -- "Multi-output Routing" -- and the top
+        # panel, with _on_quick_route_apply, _on_quick_route_stop_all,
+        # _refresh_quick_route_outputs and _refresh_quick_route_panel, is
+        # gone. Nothing was lost: the top panel's two buttons are exactly
+        # the two this one already has.
+        # --- Multi-output routing -------------------------------------
         # Checkbox list of all hardware outputs. Each checked item gets a
         # loopback. Useful for the "music plays on speakers AND
         # headphones simultaneously" use case (combine-stream preset
         # from the plan, implemented via multiple loopbacks since
         # module-combine-stream does the opposite: mix multiple sources
         # INTO one sink).
+        #
+        # This used to be a LabelFrame titled "Routing" containing another
+        # LabelFrame titled "Multi-output Routing" -- a box inside a box.
+        # The outer wrapper existed because the single-output dropdown
+        # shared the panel; with that gone, one panel does not need a
+        # second frame around it.
         self.multi_routing_frame = ttk.LabelFrame(
-            self.routing_frame, text="Multi-output Routing"
+            frame, text="Multi-output Routing"
         )
-        self.multi_routing_frame.grid(
-            row=2, column=0, columnspan=4, sticky=(tk.W, tk.E), padx=5, pady=(10, 5)
+        self.multi_routing_frame.pack(
+            fill=tk.X, pady=5
         )
+        self.multi_routing_frame.columnconfigure(1, weight=1)
 
         ttk.Label(
             self.multi_routing_frame,
@@ -2912,14 +2869,6 @@ class MainWindow:
             self._routing_sink_name = entity_name
         else:
             self._routing_sink_name = None
-        # Also update the prominent Quick Route panel at the top
-        # of the tab so users see what to do without scrolling.
-        if entity_type == "sink":
-            self._quick_route_sink_name = entity_name
-            self._refresh_quick_route_panel()
-        else:
-            self._quick_route_sink_name = None
-            self._refresh_quick_route_panel()
 
         # Update device controls panel — works for both sinks and sources
         # so the user can adjust a null-sink's playback volume OR a
@@ -2933,180 +2882,6 @@ class MainWindow:
 
         self.update_details_display(details)
 
-    # ------------------------------------------------------------------
-    # Quick Route panel (prominent panel at the top of the Manage tab)
-    # ------------------------------------------------------------------
-
-    def _refresh_quick_route_outputs(self):
-        """Re-list hardware outputs in the Quick Route checkbox listbox."""
-        try:
-            outputs = PactlRunner.list_hardware_outputs()
-        except Exception as e:
-            outputs = []
-            self.add_output(f"Quick route: failed to list outputs: {e}")
-        self._quick_route_outputs = outputs
-        # Preserve any active selection across refresh
-        prior = set(self.quick_route_listbox.curselection())
-        self.quick_route_listbox.delete(0, tk.END)
-        for i, name in enumerate(outputs):
-            # Pre-check outputs that already have an active loopback
-            # for the currently selected sink.
-            checked = i in prior
-            self.quick_route_listbox.insert(tk.END, name)
-            if checked:
-                self.quick_route_listbox.selection_set(i)
-        self._refresh_quick_route_panel()
-
-    def _refresh_quick_route_panel(self):
-        """Update the Quick Route panel's status line based on selection."""
-        sink = self._quick_route_sink_name
-        if not sink:
-            self.quick_route_status_var.set(
-                "Select a virtual sink in the tree below, then check the "
-                "outputs you want its audio to play through, then click "
-                "'Apply Routing'."
-            )
-            return
-        if not PactlRunner.is_null_sink(sink):
-            self.quick_route_status_var.set(
-                f"Selected: {sink} (hardware sink — routing not applicable)"
-            )
-            return
-        # Virtual sink — show current loopbacks
-        try:
-            monitor = PactlRunner.monitor_source_for(sink)
-            loopbacks = PactlRunner.list_loopbacks()
-            current_sinks = sorted({
-                lb["sink"] for lb in loopbacks
-                if lb.get("source") == monitor
-            })
-        except Exception:
-            current_sinks = []
-        if current_sinks:
-            self.quick_route_status_var.set(
-                f"Routing '{sink}' to: {', '.join(current_sinks)}. "
-                f"Check/uncheck outputs and click 'Apply Routing' to change."
-            )
-        else:
-            self.quick_route_status_var.set(
-                f"'{sink}' is not routed to any output. "
-                f"Check one or more outputs and click 'Apply Routing'."
-            )
-
-    def _on_quick_route_apply(self):
-        """Apply the routing for the currently selected sink to the
-        checked outputs in the Quick Route listbox.
-
-        Idempotent: routes that already exist are left alone; missing
-        routes are added; checked-but-already-routed boxes are kept;
-        unchecked loopbacks (when explicitly removed by the user) are
-        left intact — use 'Stop All Routing' to clear them.
-        """
-        sink = self._quick_route_sink_name
-        if not sink:
-            messagebox.showinfo(
-                "Apply Routing",
-                "Select a virtual sink in the tree first.",
-            )
-            return
-        if not PactlRunner.is_null_sink(sink):
-            messagebox.showinfo(
-                "Apply Routing",
-                f"'{sink}' is a hardware sink — nothing to route.",
-            )
-            return
-        sel = self.quick_route_listbox.curselection()
-        if not sel:
-            messagebox.showinfo(
-                "Apply Routing",
-                "Check at least one output in the list above.",
-            )
-            return
-        target_outputs = [self._quick_route_outputs[i] for i in sel]
-        monitor = PactlRunner.monitor_source_for(sink)
-        if not monitor:
-            messagebox.showerror(
-                "Apply Routing", f"Could not find monitor for '{sink}'."
-            )
-            return
-        # Pre-validate: all targets must exist as sinks
-        sinks = {s["name"] for s in PactlRunner.list_sinks()}
-        for t in target_outputs:
-            if t not in sinks:
-                messagebox.showerror(
-                    "Apply Routing",
-                    f"Output '{t}' does not exist anymore. Hit Refresh "
-                    "and try again.",
-                )
-                return
-        # Idempotent apply — only add missing loopbacks
-        existing = {
-            lb["sink"] for lb in PactlRunner.list_loopbacks()
-            if lb.get("source") == monitor
-        }
-        added = []
-        for t in target_outputs:
-            if t in existing:
-                continue
-            try:
-                mod = PactlRunner.create_loopback(
-                    monitor, t,
-                    latency_msec=self.get_loopback_latency_ms(),
-                    logger=self.add_output,
-                )
-            except LoopbackCycleError as exc:
-                # One bad target must not abort the ones that are fine --
-                # multi-routing is a list of independent routes.
-                messagebox.showerror(
-                    "Would create a feedback loop",
-                    f"Routing '{sink}' to '{t}' would close this loop:\n\n"
-                    f"    {exc.render()}\n\n"
-                    "That target was skipped. Remove one of those routes "
-                    "on the Manage tab first.",
-                )
-                continue
-            if mod:
-                added.append(t)
-        if added:
-            self.add_output(
-                f"Quick route: routed '{sink}' to {', '.join(added)}"
-            )
-        else:
-            self.add_output(
-                f"Quick route: '{sink}' already routes to all selected "
-                f"outputs (no changes)"
-            )
-        self._refresh_quick_route_panel()
-        self.refresh_all_views()
-
-    def _on_quick_route_stop_all(self):
-        """Stop all loopbacks for the currently selected sink."""
-        sink = self._quick_route_sink_name
-        if not sink:
-            messagebox.showinfo(
-                "Stop All Routing",
-                "Select a virtual sink in the tree first.",
-            )
-            return
-        if not PactlRunner.is_null_sink(sink):
-            messagebox.showinfo(
-                "Stop All Routing",
-                f"'{sink}' is a hardware sink — nothing to stop.",
-            )
-            return
-        monitor = PactlRunner.monitor_source_for(sink)
-        if not monitor:
-            return
-        stopped = 0
-        for lb in PactlRunner.list_loopbacks():
-            if lb.get("source") == monitor:
-                if PactlRunner.unload_loopback(lb["id"], logger=self.add_output):
-                    stopped += 1
-        self.add_output(
-            f"Quick route: stopped {stopped} loopback(s) for '{sink}'"
-        )
-        self._refresh_quick_route_panel()
-        self.refresh_all_views()
 
     # ------------------------------------------------------------------
     # Routing panel methods (Phase 2: loopback support)

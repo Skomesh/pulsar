@@ -153,11 +153,27 @@ class TestChannelsAcceptAnyCount(unittest.TestCase):
         self.app, self.root = build_app()
         self.addCleanup(self.root.destroy)
 
-    def test_channels_entry_is_editable(self):
+    def test_a_custom_channel_count_is_typeable(self):
+        """The user must be able to type a count that is not suggested.
+
+        This used to be asserted as "the combobox itself is editable".
+        That satisfied the letter of the requirement and none of its
+        purpose: an editable combobox whose dropdown lists 1/2/4/6/8
+        reads as a closed set, and user testing reported exactly that --
+        "channels are still limited to 8 with no custom field".
+
+        The requirement is that a count outside the dropdown is
+        reachable. It now is, through an explicit Custom option and a
+        dedicated field.
+        """
+        values = tuple(str(v) for v in self.app.channels_combo["values"])
+        self.assertIn("Custom", values)
+        self.app.channels_var.set("Custom")
+        self.app._on_channels_preset_change()
         self.assertEqual(
-            str(self.app.channels_combo.cget("state")), "normal",
-            "channels entry is not editable, so no count outside the "
-            "dropdown is typeable",
+            str(self.app.channels_custom_entry.cget("state")), "normal",
+            "the custom channel field is not editable, so no count "
+            "outside the dropdown is typeable",
         )
 
     def test_the_old_suggestions_are_still_offered(self):
@@ -166,21 +182,24 @@ class TestChannelsAcceptAnyCount(unittest.TestCase):
             self.assertIn(expected, values)
 
     def test_an_arbitrary_channel_count_is_accepted(self):
-        self.app.channels_var.set("16")
+        self.app.channels_var.set("Custom")
+        self.app.channels_custom_var.set("16")
         self.root.update_idletasks()
-        self.assertEqual(int(self.app.channels_var.get()), 16)
+        self.assertEqual(self.app._effective_channels(), 16)
         self.app.update_command_preview()
         self.assertIn("channels=16", self.app.command_preview_var.get())
 
     def test_an_odd_channel_count_is_accepted(self):
-        self.app.channels_var.set("7")
+        self.app.channels_var.set("Custom")
+        self.app.channels_custom_var.set("7")
         self.root.update_idletasks()
-        self.assertEqual(int(self.app.channels_var.get()), 7)
+        self.assertEqual(self.app._effective_channels(), 7)
 
     def test_channel_map_does_not_stay_stale_for_an_unlisted_count(self):
         """A 2-entry channel map with 16 channels is rejected by pactl, so
         the map must be cleared (PulseAudio then picks by channel count)."""
-        self.app.channels_var.set("16")
+        self.app.channels_var.set("Custom")
+        self.app.channels_custom_var.set("16")
         self.root.update_idletasks()
         self.assertEqual(self.app.channel_map_var.get().strip(), "")
 

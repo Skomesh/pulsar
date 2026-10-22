@@ -513,19 +513,49 @@ class MainWindow:
             row=2, column=0, sticky=tk.W, pady=5
         )
         self.channels_var = tk.StringVar(value="2")
-        # Editable: PulseAudio accepts any positive channel count
-        # (`channels=16` loads and reports 'float32le 16ch 48000Hz'), so
-        # the old 1/2/4/6/8-only list was an artificial ceiling. The old
-        # values stay as dropdown suggestions.
+        # A custom channel count is a real option, not a secret.
+        #
+        # The control used to be an editable combobox whose dropdown listed
+        # only 1/2/4/6/8. Typing a different number did work, but nothing
+        # said so: the dropdown looked like the complete set of allowed
+        # values, and user testing read it exactly that way -- "channels
+        # are still limited to 8 with no custom field".
+        #
+        # PulseAudio has no 8-channel ceiling (`channels=16` loads and
+        # reports 'float32le 16ch 48000Hz'). The ceiling was in the UI.
+        #
+        # So the common values stay as suggestions, and "Custom" is an
+        # explicit entry in the list that reveals a field to type into --
+        # the same shape as the Channel Map row directly below it, so the
+        # panel teaches one pattern instead of two.
         self.channels_combo = ttk.Combobox(
             self.advanced_frame,
             textvariable=self.channels_var,
-            values=("1", "2", "4", "6", "8"),
+            values=("1", "2", "4", "6", "8", "Custom"),
             width=10,
-            state="normal",
+            state="readonly",
         )
         self.channels_combo.grid(row=2, column=1, sticky=tk.W, padx=5, pady=5)
         self.channels_combo.current(1)  # Default to stereo (2 channels)
+        self.channels_combo.bind(
+            "<<ComboboxSelected>>", self._on_channels_preset_change
+        )
+
+        # The typed channel count, used only when "Custom" is selected.
+        self.channels_custom_var = tk.StringVar()
+        ttk.Label(self.advanced_frame, text="Custom:").grid(
+            row=2, column=2, sticky=tk.W, pady=5
+        )
+        self.channels_custom_entry = ttk.Entry(
+            self.advanced_frame, textvariable=self.channels_custom_var, width=8,
+            state="disabled",
+        )
+        self.channels_custom_entry.grid(row=2, column=3, sticky=tk.W, padx=5, pady=5)
+        ttk.Label(
+            self.advanced_frame,
+            text="(any number of channels)",
+            font=("", 8),
+        ).grid(row=2, column=4, sticky=tk.W, pady=5)
 
         # Channel Map
         # Channel Map — preset dropdown + custom entry. The map tells
@@ -584,9 +614,14 @@ class MainWindow:
 
         # Update default map when channels preset changes (Stereo is
         # the natural default for 2 channels, etc.)
+        # Note the signature: no `self` parameter. This is a trace
+        # callback, so Tk calls it with (name, index, mode) and a `self`
+        # parameter would bind to the variable's NAME STRING -- shadowing
+        # the real MainWindow. `self` here is the enclosing
+        # setup_create_tab scope's.
         def _on_channels_change_default_map(*_):
             try:
-                ch = int(self.channels_var.get())
+                ch = self._effective_channels()
             except (ValueError, tk.TclError):
                 return
             # Don't override user custom choice
@@ -619,6 +654,11 @@ class MainWindow:
             self.channel_map_var.set(default_map)
 
         self.channels_var.trace_add("write", _on_channels_change_default_map)
+        # The custom field is a second source for the same value, so it
+        # needs the same reactions. Without this, typing 16 into the
+        # custom field would not update the channel map default or the
+        # command preview until the dropdown was touched.
+        self.channels_custom_var.trace_add("write", _on_channels_change_default_map)
 
         # Additional Properties (moved to row 5 to make room for
         # the custom channel-map entry that appears below the
@@ -768,6 +808,7 @@ class MainWindow:
         self.sink_name_var.trace_add("write", self.update_command_preview)
         self.audio_preset_var.trace_add("write", self.update_command_preview)
         self.channels_var.trace_add("write", self.update_command_preview)
+        self.channels_custom_var.trace_add("write", self.update_command_preview)
         self.rate_var.trace_add("write", self.update_command_preview)
         self.format_var.trace_add("write", self.update_command_preview)
         self.channel_map_var.trace_add("write", self.update_command_preview)
@@ -2262,6 +2303,48 @@ class MainWindow:
         else:  # "both"
             return self._create_device_of_type("both")
 
+    def _on_channels_preset_change(self, event=None):
+        """Enable the custom channel field only when "Custom" is chosen."""
+        custom = self.channels_var.get() == "Custom"
+        self.channels_custom_entry.config(
+            state="normal" if custom else "disabled")
+        if not custom:
+            self.channels_custom_var.set("")
+        self.update_command_preview()
+
+    def _effective_channels(self):
+        """The channel count to use, as an int.
+
+        Raises ValueError with a message worth showing the user, rather
+        than falling back to a default. The old code did:
+
+            try:
+                channels = int(self.channels_var.get())
+            except ValueError:
+                channels = 2
+
+        so a typo silently produced a stereo sink instead of the 16
+        channels the user asked for, with no indication that anything had
+        gone wrong.
+        """
+        raw = self.channels_var.get().strip()
+        if raw == "Custom":
+            raw = self.channels_custom_var.get().strip()
+            if not raw:
+                raise ValueError(
+                    "Enter a channel count, or pick one from the list.")
+        try:
+            count = int(raw)
+        except ValueError:
+            raise ValueError(
+                f"'{raw}' is not a valid channel count. "
+                f"Use a whole number, such as 2 or 16.") from None
+        if count < 1:
+            raise ValueError(
+                f"'{count}' is not a valid channel count. "
+                f"Use a whole number of at least 1.")
+        return count
+
     def _explicit_rate(self):
         """The sample rate to send, or None when the user has not chosen one.
 
@@ -2321,9 +2404,10 @@ class MainWindow:
                 name = cleaned_name
 
         try:
-            channels = int(self.channels_var.get())
-        except ValueError:
-            channels = 2
+            channels = self._effective_channels()
+        except ValueError as exc:
+            messagebox.showerror("Error", str(exc))
+            return
 
         if not description:
             selected_preset = self.audio_preset_var.get()
@@ -3876,7 +3960,15 @@ class MainWindow:
         else:
             name = raw_name.replace(" (auto)", "")
 
-        channels = self.channels_var.get() or "2"
+        # The preview must show what would really be created, including a
+        # custom channel count. An invalid value is shown as-is rather than
+        # silently previewing a different sink than the one that gets made.
+        try:
+            channels = str(self._effective_channels())
+        except ValueError:
+            channels = self.channels_var.get() or "2"
+            if self.channels_var.get() == "Custom":
+                channels = self.channels_custom_var.get() or "?"
 
         # Pick media.class based on the selected device type
         device_type = (
@@ -4109,8 +4201,20 @@ class MainWindow:
         preset_data = self.preset_manager.get_preset(selected_preset)
 
         if preset_data:
-            # Load preset configuration
-            self.channels_var.set(preset_data.get("channels", "2"))
+            # Load preset configuration. A stored channel count that is not
+            # one of the suggestions has to come back as "Custom" with the
+            # number in the custom field -- otherwise the dropdown would
+            # show a value that is not in its own list, and the count
+            # would be lost on the next save.
+            stored_channels = str(preset_data.get("channels", "2"))
+            if stored_channels in ("1", "2", "4", "6", "8"):
+                self.channels_var.set(stored_channels)
+                self.channels_custom_var.set("")
+                self.channels_custom_entry.config(state="disabled")
+            else:
+                self.channels_var.set("Custom")
+                self.channels_custom_var.set(stored_channels)
+                self.channels_custom_entry.config(state="normal")
             self.channel_map_var.set(preset_data.get("channel_map", ""))
 
             # Update placeholder text for sink name if user hasn't customized it
@@ -4363,9 +4467,17 @@ class MainWindow:
             messagebox.showerror("Error", f"Cannot overwrite builtin preset: {preset_name}")
             return
 
-        # Collect current configuration
+        # Collect current configuration. The channel count is stored as the
+        # number that will actually be used, not as the dropdown label --
+        # "Custom" on its own would lose the count entirely.
+        try:
+            saved_channels = str(self._effective_channels())
+        except ValueError as exc:
+            messagebox.showerror("Error", str(exc))
+            return
+
         preset_data = {
-            "channels": self.channels_var.get(),
+            "channels": saved_channels,
             "channel_map": self.channel_map_var.get(),
             "description": self.sink_desc_var.get() or f"{preset_name} Virtual Device"
         }

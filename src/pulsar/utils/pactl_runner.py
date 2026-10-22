@@ -996,6 +996,62 @@ class PactlRunner:
         return loopbacks
 
     @staticmethod
+    def unload_null_sink_by_name(sink_name, require_managed=True, logger=None) -> bool:
+        """Unload the null-sink with this name, found fresh by identity.
+
+        Never trust a module id captured earlier.
+
+        PipeWire REUSES module ids once they are freed. Observed in a
+        single test run: id 536870920 belonged to `cap_opt`, then to
+        `cap_dup`, then to `cap_lb`, then to `cap_sink`, then to
+        `cap_src`. An id recorded at creation time therefore points at a
+        completely different module by the time it is used, and
+        unloading it removes the wrong thing.
+
+        It did, in practice: unloading a stale id removed
+        module-always-sink, and with it the machine's default output --
+        the user's speakers disappeared mid-test-session.
+
+        So the module is looked up by what it IS -- its sink_name -- and
+        its current id is read at that moment. The ownership marker is
+        still required by default, so this cannot be used to remove a
+        sink this program did not create.
+        """
+        modules = PactlRunner.list_modules(logger)
+        for m in modules:
+            if m.get("name") != "module-null-sink":
+                continue
+            if f"sink_name={sink_name}" not in set(m.get("argument", "").split()):
+                continue
+            if require_managed and not PactlRunner._is_managed_module(m):
+                continue
+            mod_id = m.get("id")
+            if not mod_id:
+                continue
+            return PactlRunner.unload_module(mod_id, logger)
+        return False
+
+    @staticmethod
+    def unload_loopback_by_endpoints(source, sink, logger=None) -> bool:
+        """Unload the loopback routing source -> sink, found fresh.
+
+        The same id-reuse hazard as unload_null_sink_by_name. A loopback
+        is identified by its two endpoints, which are stable, rather than
+        by a module id that may since have been reused.
+        """
+        modules = PactlRunner.list_modules(logger)
+        for m in modules:
+            if m.get("name") != "module-loopback":
+                continue
+            tokens = set(m.get("argument", "").split())
+            if f"source={source}" in tokens and f"sink={sink}" in tokens:
+                mod_id = m.get("id")
+                if not mod_id:
+                    continue
+                return PactlRunner.unload_module(mod_id, logger)
+        return False
+
+    @staticmethod
     def unload_loopback(module_id: str, logger=None) -> bool:
         """
         Unload a module-loopback by ID.

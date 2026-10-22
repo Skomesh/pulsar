@@ -667,17 +667,42 @@ class ProfileManager:
         return result
 
     def _rollback(self, result: Dict[str, Any], logger=None) -> None:
-        """Unload everything we created in this apply attempt."""
+        """Unload everything we created in this apply attempt.
+
+        By IDENTITY, not by the module id captured at creation time.
+        PipeWire reuses module ids once they are freed, so a captured id
+        can point at an unrelated module by the time the rollback runs --
+        and unloading it removes the wrong thing. That is how the
+        machine's default output (module-always-sink) got removed during
+        a test run.
+
+        A null-sink is identified by its sink_name, and a loopback by its
+        two endpoints. Both are stable. The ownership marker is still
+        required for a null-sink, so the rollback cannot remove something
+        this program did not create.
+        """
         if logger:
             logger("Rolling back partial apply...")
         for lb in result["created_loopbacks"]:
-            mod_id = lb.get("module_id")
-            if mod_id is not None:
-                PactlRunner.unload_loopback(str(mod_id), logger)
+            src = lb.get("from")
+            tgt = lb.get("to")
+            if src and tgt:
+                # The loopback's source is the sink's monitor.
+                source = src if str(src).endswith(".monitor") else f"{src}.monitor"
+                PactlRunner.unload_loopback_by_endpoints(source, tgt, logger)
+            else:
+                mod_id = lb.get("module_id")
+                if mod_id is not None:
+                    PactlRunner.unload_loopback(str(mod_id), logger)
         for d in result["created_devices"]:
-            mod_id = d.get("module_id")
-            if mod_id is not None:
-                PactlRunner.unload_module(str(mod_id), logger)
+            name = d.get("name")
+            if name:
+                PactlRunner.unload_null_sink_by_name(
+                    name, require_managed=True, logger=logger)
+            else:
+                mod_id = d.get("module_id")
+                if mod_id is not None:
+                    PactlRunner.unload_module(str(mod_id), logger)
         result["created_devices"] = []
         result["created_loopbacks"] = []
         result["rolled_back"] = True

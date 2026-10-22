@@ -37,10 +37,10 @@ for every filename above. `<arch>` is the build machine's architecture
 The table above lists the names, not a promise that this machine can
 produce them. What is actually buildable, and what was verified by really
 running the build, is in [What is verified, and what is not](#what-is-verified-and-what-is-not)
-at the bottom of this file. In short: **deb, rpm and AppImage build here;
-snap and flatpak do not** (no snapd on this box, and the freedesktop SDK is
-a download this box does not fetch). Those two are built only by the
-release workflow.
+at the bottom of this file. In short: **deb, rpm, AppImage and flatpak build here; snap does not.**
+The freedesktop SDK does fetch, and the flatpak really builds — see the
+table at the bottom. Snapcraft runs here too, but cannot finish, for a
+reason that is about this host's apt rather than about the recipe.
 
 ### Two formats needed a wrapper to get here
 
@@ -196,6 +196,33 @@ snap audio is simply dead. `PULSE_SERVER` must be redirected to the real
 `/run/user/<uid>/pulse/native`. The recipe does this in a
 self-contained launch wrapper.
 
+**Running snapcraft without snapd.** snapcraft ships only as a snap, so
+no distro can `apt-get install` it — but the store serves the squashfs
+over plain HTTP and `unsquashfs` reads it. Three obstacles, each with a
+specific fix:
+
+```bash
+W=/tmp/snapcraft/snap
+curl -sL -o snapcraft.snap "https://api.snapcraft.io/api/v1/snaps/download/…"
+unsquashfs -f -d "$W" snapcraft.snap
+
+export PYTHONPATH=$W/lib/python3.12/site-packages
+# NOT the snap's own lib dir -- it is a base snap and bundles no libc, so
+# pointing LD_LIBRARY_PATH there stops libc.so.6 resolving at all.
+export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu
+# The interpreter is /snap/core24/current/lib64/ld-linux-x86-64.so.2, which
+# does not exist here, so the system loader is invoked explicitly.
+/lib64/ld-linux-x86-64.so.2 "$W/usr/bin/python3.12" "$W/bin/snapcraft" "$@"
+```
+
+That gets you `snapcraft 9.2.1`, which parses the recipe and processes
+all four parts. It cannot then finish, because craft-parts imports
+`python-apt` and this snap's Python 3.12 needs `libapt-pkg.so.6.0` from
+apt 2.7, while this host has apt 3.x (`libapt-pkg.so.7.0`). The 2.7
+library is not in the archive pool reachable from here. That is a host
+packaging mismatch inside snapcraft's own package backend, not anything
+the recipe can fix, and it fires before any part is built.
+
 ### flatpak — `packaging/flatpak/pulsar.yml`
 
 `org.freedesktop.Platform//24.08`. Reaches PulseAudio the supported way:
@@ -208,6 +235,49 @@ which is what shipped apps do.
 
 Both manifests have **no `version` key**, which is legal — flatpak takes
 the version from the branch.
+
+**How to build it here, since flatpak is not installed system-wide.** It
+needs no root:
+
+```bash
+# flatpak + flatpak-builder, unpacked from .debs
+mkdir -p /tmp/fbt && cd /tmp/fbt
+apt-get download flatpak flatpak-builder libflatpak0 libostree-1-1 \
+                 libcomposefs1 libpolkit-gobject-1-0 libpolkit-agent-1-0 \
+                 libmalcontent-0-0 elfutils
+for d in *.deb; do dpkg -x "$d" /tmp/fbt/root; done
+export LD_LIBRARY_PATH=/tmp/fbt/root/usr/lib/x86_64-linux-gnu
+export PATH=/tmp/fbt/root/usr/bin:$PATH
+
+export FLATPAK_USER_DIR="$HOME/.local/share/flatpak-test"
+flatpak remote-add --user --if-not-exists flathub \
+    https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak install --user -y flathub org.freedesktop.Platform//24.08
+flatpak install --user -y flathub org.freedesktop.Sdk//24.08
+
+flatpak-builder --user --force-clean --disable-rofiles-fuse \
+    --state-dir="$HOME/.cache/fb-state" "$HOME/fb-build" \
+    packaging/flatpak/pulsar.yml
+```
+
+Three things that are not optional:
+
+- **`FLATPAK_USER_DIR` must be exported** or the SDK is installed to the
+  default location and `flatpak-builder`, running with a different
+  `FLATPAK_USER_DIR` in a previous attempt, cannot see it. That is what
+  produced the misleading `Unable to find sdk org.freedesktop.Sdk version
+  24.08` while the SDK was demonstrably installed: it was looking in
+  `runtime/…` while the SDK had landed in `sdk/…` under a different
+  user dir.
+- **`elfutils` is required.** Without `eu-strip` the Tcl build dies at the
+  strip stage with a bare `Failed to execute child process "eu-strip"`.
+- **`--state-dir` and the build dir must be on the same filesystem**, or
+  flatpak-builder refuses to start.
+
+The final `flatpak build-export` step is not reproduced here: it invokes
+`/usr/libexec/flatpak-validate-icon` by absolute path, that directory is
+root-owned, and there is no sudo. Any machine with flatpak actually
+installed — including the release runner — has it.
 
 ---
 
@@ -236,8 +306,8 @@ the version from the branch.
 | **deb** | yes | Assembled with `dpkg-deb`, inspected, extracted. Real `.deb` produced. |
 | **AppImage** | yes | 69 MB, sha256 verified, extracted and **run** — GUI rendered under Xvfb. |
 | **rpm** | yes | Built end-to-end with Fedora's `pyproject-rpm-macros` under `rpmbuild 6.0.1`. Real `.rpm`, 62 files, `check-files` reports nothing unpackaged. |
-| **flatpak** | no | Manifests parse and validate; the freedesktop SDK is a large download not fetched here. |
-| **snap** | no | `snapcraft` ships only as a snap; this box has no snapd. |
+| **flatpak** | yes | Built for real with `flatpak-builder 1.4.8` against `org.freedesktop.Sdk//24.08`: Tcl, Tk and `tkinter-standalone` all compile, and the finished app dir contains both launchers, `_tkinter`, the `pulsar` package, the desktop entry (`Exec=pulsar-gui`) and the icon. 44 MB. The only step not reproduced here is `flatpak build-export`, which needs `flatpak-validate-icon` at the hardcoded `/usr/libexec` — see below. |
+| **snap** | partial | `snapcraft 9.2.1` runs here (extracted from the store, no snapd) and parses and processes all four parts, but cannot complete: its bundled Python 3.12 wants `libapt-pkg.so.6.0` from apt 2.7, this host has apt 3.x (`libapt-pkg.so.7.0`), and the 2.7 library is not retrievable here. Nothing in the recipe was implicated — the failure is in snapcraft's own package backend before any part is built. |
 
 "Written but unbuilt" is not a soft caveat. Every format that has not been
 built has a proven record of containing build-breaking bugs that no amount

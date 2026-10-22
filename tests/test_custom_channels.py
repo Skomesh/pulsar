@@ -42,7 +42,6 @@ class TestCustomChannelCount(unittest.TestCase):
     def tearDown(self):
         self.app.channels_var.set("2")
         self.app.channels_custom_var.set("")
-        self.app.channels_custom_entry.config(state="disabled")
         self.app._on_channels_preset_change()
         self.root.update_idletasks()
 
@@ -59,19 +58,35 @@ class TestCustomChannelCount(unittest.TestCase):
             ["1", "2", "4", "6", "8"],
             "the common values should stay as suggestions")
 
-    def test_choosing_custom_enables_the_field(self):
+    def test_choosing_custom_shows_the_field(self):
+        """Hidden until Custom is chosen, then shown on its own row.
+
+        Visibility rather than an enabled/disabled state: a greyed-out
+        field on screen still reads as "a field that is somehow not
+        active", which is what the first version of this looked like.
+        """
         self.app.channels_var.set("Custom")
         self.app._on_channels_preset_change()
+        self.root.update_idletasks()
+        # winfo_manager, not winfo_ismapped: the Advanced Options frame is
+        # collapsed in this test, so nothing inside it is mapped no matter
+         # what we do. What matters is whether the widget is gridded at all.
+        self.assertEqual(
+            self.app.channels_custom_entry.winfo_manager(), "grid",
+            "the custom channel field is not shown after choosing Custom")
         self.assertEqual(
             str(self.app.channels_custom_entry.cget("state")), "normal")
 
-    def test_choosing_a_preset_disables_the_field(self):
+    def test_choosing_a_preset_hides_the_field(self):
         self.app.channels_var.set("Custom")
         self.app._on_channels_preset_change()
+        self.root.update_idletasks()
         self.app.channels_var.set("8")
         self.app._on_channels_preset_change()
+        self.root.update_idletasks()
         self.assertEqual(
-            str(self.app.channels_custom_entry.cget("state")), "disabled")
+            self.app.channels_custom_entry.winfo_manager(), "",
+            "the custom channel field is still shown after choosing a preset")
 
     def test_a_custom_count_is_used(self):
         """The whole point: 16 is not 8."""
@@ -84,13 +99,26 @@ class TestCustomChannelCount(unittest.TestCase):
         self.assertEqual(self.app._effective_channels(), 8)
 
     def test_the_old_ceiling_is_not_enforced(self):
-        """Any positive count is allowed, including ones nobody suggested."""
-        for count in (1, 3, 5, 7, 9, 16, 24, 64):
+        """Any count up to 16 is allowed, including ones nobody suggested.
+
+        The old list topped out at 8, which was a UI invention rather
+        than a PulseAudio limit. The ceiling is 16.
+        """
+        for count in (1, 3, 5, 7, 9, 16):
             self.app.channels_var.set("Custom")
             self.app.channels_custom_var.set(str(count))
             self.assertEqual(
                 self.app._effective_channels(), count,
                 f"{count} channels should be allowed")
+
+    def test_more_than_sixteen_channels_is_rejected(self):
+        """The user asked for a maximum of 16."""
+        for count in (17, 24, 64):
+            self.app.channels_var.set("Custom")
+            self.app.channels_custom_var.set(str(count))
+            with self.assertRaises(ValueError) as ctx:
+                self.app._effective_channels()
+            self.assertIn("maximum of 16", str(ctx.exception))
 
     def test_custom_selected_with_nothing_typed_is_an_error(self):
         """Not a silent fallback to 2."""

@@ -289,7 +289,7 @@ class MainWindow:
             value = self.sink_name_var.get()
             if value.endswith(" (auto)"):
                 self.sink_name_var.set("")
-                self.sink_name_entry.config(foreground="black")
+                self._set_name_field_normal()
             else:
                 self.user_has_custom_name = bool(value.strip())
 
@@ -427,6 +427,10 @@ class MainWindow:
             return default
 
         detected_rate = str(_detect_default_sink_rate())
+        # Kept on the instance so the code paths that need the hardware's
+        # rate -- notably on_audio_preset_selected -- do not have to
+        # hardcode one. See the comment on that call site.
+        self._detected_rate = detected_rate
         self.rate_var = tk.StringVar(value=detected_rate)
         rate_choices = ["8000", "16000", "22050", "44100",
                         "48000", "88200", "96000", "192000"]
@@ -542,20 +546,28 @@ class MainWindow:
         )
 
         # The typed channel count, used only when "Custom" is selected.
+        #
+        # It lives on its own row UNDER the dropdown and is hidden until
+        # Custom is chosen. The first version put it to the right of the
+        # dropdown, where it read as a permanent second field and made the
+        # row look like a form with two inputs for one value.
         self.channels_custom_var = tk.StringVar()
-        ttk.Label(self.advanced_frame, text="Custom:").grid(
-            row=2, column=2, sticky=tk.W, pady=5
+        self.channels_custom_label = ttk.Label(
+            self.advanced_frame, text="Custom channels:"
         )
         self.channels_custom_entry = ttk.Entry(
-            self.advanced_frame, textvariable=self.channels_custom_var, width=8,
-            state="disabled",
+            self.advanced_frame, textvariable=self.channels_custom_var, width=10,
         )
-        self.channels_custom_entry.grid(row=2, column=3, sticky=tk.W, padx=5, pady=5)
-        ttk.Label(
+        self.channels_custom_hint = ttk.Label(
             self.advanced_frame,
-            text="(any number of channels)",
+            text="(1 to 16)",
             font=("", 8),
-        ).grid(row=2, column=4, sticky=tk.W, pady=5)
+        )
+        # Start hidden: "2" is selected, so the custom field has no meaning
+        # yet and showing it would only invite confusion.
+        self.channels_custom_label.grid_remove()
+        self.channels_custom_entry.grid_remove()
+        self.channels_custom_hint.grid_remove()
 
         # Channel Map
         # Channel Map — preset dropdown + custom entry. The map tells
@@ -1092,6 +1104,10 @@ class MainWindow:
             state="disabled",
         )
         self.multi_stop_all_button.pack(side=tk.LEFT, padx=5)
+
+        # Populate the output list now, so the panel is usable the moment
+        # the tab opens rather than only after the first refresh.
+        self._refresh_multi_routing_outputs()
 
         # --- Device controls — per-device volume slider, mute, set-as-default.
         # Lets the user adjust the selected virtual sink's volume without
@@ -2303,11 +2319,52 @@ class MainWindow:
         else:  # "both"
             return self._create_device_of_type("both")
 
+    def _show_custom_channels_field(self, show: bool):
+        """Show or hide the custom channel row.
+
+        grid_remove rather than a disabled state: a greyed-out field on
+        screen still reads as "a field that is somehow not active", which
+        is the impression the right-hand layout gave. Hidden is hidden.
+        """
+        for widget in (self.channels_custom_label, self.channels_custom_entry,
+                       self.channels_custom_hint):
+            if show:
+                widget.grid()
+            else:
+                widget.grid_remove()
+        if show:
+            self.channels_custom_label.grid(row=3, column=0, sticky=tk.W, pady=5)
+            self.channels_custom_entry.grid(
+                row=3, column=1, sticky=tk.W, padx=5, pady=5)
+            self.channels_custom_hint.grid(
+                row=3, column=2, sticky=tk.W, pady=5)
+            self.channels_custom_entry.focus_set()
+
+    def _set_name_field_normal(self):
+        """Put the name field back to the theme's normal text colour.
+
+        The field used to hold grey placeholder text of its own, and the
+        grey was what signalled "auto-generated, not really yours". It no
+        longer does: the placeholder is a separate label beside the
+        field, and the field itself is either empty or holds a name the
+        user typed. So the text in it should always be normal colour.
+
+        The theme's own foreground is used rather than a hard-coded
+        "black", which is wrong on a dark theme and wrong again on the
+        next one.
+        """
+        try:
+            colour = ttk.Style().lookup("TEntry", "foreground")
+        except Exception:  # pragma: no cover - theme without the option
+            colour = ""
+        if not colour:
+            colour = "black"
+        self.sink_name_entry.config(foreground=colour)
+
     def _on_channels_preset_change(self, event=None):
-        """Enable the custom channel field only when "Custom" is chosen."""
+        """Show the custom channel field only when "Custom" is chosen."""
         custom = self.channels_var.get() == "Custom"
-        self.channels_custom_entry.config(
-            state="normal" if custom else "disabled")
+        self._show_custom_channels_field(custom)
         if not custom:
             self.channels_custom_var.set("")
         self.update_command_preview()
@@ -2343,6 +2400,11 @@ class MainWindow:
             raise ValueError(
                 f"'{count}' is not a valid channel count. "
                 f"Use a whole number of at least 1.")
+        if count > 16:
+            raise ValueError(
+                f"{count} channels is more than the maximum of 16. "
+                f"PulseAudio's null-sink tops out there, and a count "
+                f"beyond it is not a layout anyone can use.")
         return count
 
     def _explicit_rate(self):
@@ -2397,7 +2459,7 @@ class MainWindow:
                     name = cleaned_name
                     self.sink_name_var.set(name)
                     self.user_has_custom_name = True
-                    self.sink_name_entry.config(foreground="black")
+                    self._set_name_field_normal()
                 else:
                     return
             else:
@@ -2500,6 +2562,56 @@ class MainWindow:
         # Update status
         self.status_var.set(f"Found {len(modules)} modules, {len(sinks)} sinks, {len(sources)} sources")
         self.add_output(f"Refreshed all components: {len(modules)} modules, {len(sinks)} sinks, {len(sources)} sources")
+
+        # The Multi-output Routing listbox is a view of the hardware
+        # outputs, so it is refreshed with everything else.
+        self._refresh_multi_routing_outputs()
+
+    def _refresh_multi_routing_outputs(self):
+        """Re-list the hardware outputs in the Multi-output Routing listbox.
+
+        This has to exist. The Multi-output Routing panel's listbox was
+        created and never populated: the only code that filled a
+        hardware-outputs listbox lived in the deleted "Route Selected
+        Sink" panel, and removing that panel took the populating with
+        it. The listbox looked fine -- it was just always empty, so
+        there was nothing to select and Apply to Selected did nothing.
+
+        The selection is preserved across refreshes, and outputs that
+        already carry a loopback for the selected sink are pre-checked,
+        so a refresh does not quietly drop a route the user had set up.
+        """
+        try:
+            outputs = PactlRunner.list_hardware_outputs()
+        except Exception as e:
+            outputs = []
+            self.add_output(f"Multi-output routing: failed to list outputs: {e}")
+
+        prior = set(self.multi_routing_listbox.curselection())
+        self.multi_routing_listbox.delete(0, tk.END)
+        for i, name in enumerate(outputs):
+            self.multi_routing_listbox.insert(tk.END, name)
+            if i in prior:
+                self.multi_routing_listbox.selection_set(i)
+
+        # Pre-check the outputs this sink is already routed to.
+        sink = getattr(self, "_routing_sink_name", None)
+        if sink:
+            try:
+                monitor = PactlRunner.monitor_source_for(sink)
+            except Exception:
+                monitor = None
+            if monitor:
+                try:
+                    active = {
+                        lb.get("sink") for lb in PactlRunner.list_loopbacks()
+                        if lb.get("source") == monitor
+                    }
+                except Exception:
+                    active = set()
+                for i, name in enumerate(outputs):
+                    if name in active:
+                        self.multi_routing_listbox.selection_set(i)
 
     def _map_modules_to_devices(self, modules, sinks, sources):
         """
@@ -4210,11 +4322,11 @@ class MainWindow:
             if stored_channels in ("1", "2", "4", "6", "8"):
                 self.channels_var.set(stored_channels)
                 self.channels_custom_var.set("")
-                self.channels_custom_entry.config(state="disabled")
+                self._show_custom_channels_field(False)
             else:
                 self.channels_var.set("Custom")
                 self.channels_custom_var.set(stored_channels)
-                self.channels_custom_entry.config(state="normal")
+                self._show_custom_channels_field(True)
             self.channel_map_var.set(preset_data.get("channel_map", ""))
 
             # Update placeholder text for sink name if user hasn't customized it
@@ -4245,8 +4357,14 @@ class MainWindow:
 
                 auto_name = self._get_available_name(base_name)
                 self.sink_name_var.set(f"{auto_name} (auto)")
-                # Ensure placeholder styling
-                self.sink_name_entry.config(foreground="gray")
+                # No grey styling here. The field no longer holds
+                # placeholder text of its own -- the placeholder is a
+                # separate label beside it, and the " (auto)" value is
+                # stripped back to empty by the trace. Setting the
+                # foreground to grey here ran AFTER that trace, so the
+                # field ended up empty AND grey, and everything the
+                # user then typed came out grey too.
+                self._set_name_field_normal()
 
             # Update description if user hasn't customized it
             current_desc = self.sink_desc_var.get()
@@ -4266,8 +4384,31 @@ class MainWindow:
                 # Sample rate
                 if "rate" in preset_data:
                     self.rate_var.set(str(preset_data["rate"]))
-                else:
-                    self.rate_var.set("44100")
+                elif not getattr(self, "_rate_user_set", False):
+                    # The hardware's rate, NOT a hardcoded 44100.
+                    #
+                    # This used to write 44100, which had two effects
+                    # beyond the obvious one. It made the rate briefly
+                    # wrong, and it made everything DERIVED from the
+                    # rate wrong too: the Loopback Latency "Auto"
+                    # recommendation is computed from the sample rate,
+                    # so the app opened showing "Auto - 46 ms
+                    # (recommended for 44kHz)" on a 48kHz machine --
+                    # with the rate field itself correctly reading
+                    # 48000. The label never recovered, because the
+                    # restore-to-detected-rate trace and the latency
+                    # trace were both fighting over the same variable.
+                    #
+                    # Writing the detected rate directly removes the
+                    # transient entirely, so there is nothing to recover
+                    # from.
+                    #
+                    # But only when the user has NOT chosen a rate
+                    # themselves. A preset that carries its own rate
+                    # still applies that; a preset that does not must
+                    # not silently discard the user's own choice.
+                    self.rate_var.set(
+                        getattr(self, "_detected_rate", "48000"))
 
                 # Sample format
                 if "format" in preset_data:
@@ -4362,7 +4503,7 @@ class MainWindow:
             # Remove the (auto) suffix and change color to normal
             actual_name = current_value.replace(" (auto)", "")
             self.sink_name_var.set(actual_name)
-            self.sink_name_entry.config(foreground="black")
+            self._set_name_field_normal()
             # Select all text for easy replacement
             self.sink_name_entry.select_range(0, tk.END)
 
@@ -4382,19 +4523,23 @@ class MainWindow:
             if not is_likely_auto:
                 # User has entered truly custom content
                 self.user_has_custom_name = True
-                self.sink_name_entry.config(foreground="black")
-            else:
-                # Might be auto-generated, keep auto mode but ensure proper styling
-                self.sink_name_entry.config(foreground="black")
+            # Either way the text in the field is the user's, so it is
+            # normal colour. The field no longer holds grey placeholder
+            # text of its own.
+            self._set_name_field_normal()
 
     def on_name_key_press(self, event):
         """Handle key press event for the sink name entry."""
+        # Whatever the user types is their text, so it is always
+        # normal colour. Previously the colour was only fixed up
+        # when the value carried the " (auto)" suffix, so text typed
+        # into a field that had been left grey came out grey.
+        self._set_name_field_normal()
         current_value = self.sink_name_var.get()
         if current_value.endswith(" (auto)"):
             # User is typing, remove auto suffix and mark as custom
             actual_name = current_value.replace(" (auto)", "")
             self.sink_name_var.set(actual_name)
-            self.sink_name_entry.config(foreground="black")
             self.user_has_custom_name = True
             # Position cursor at the end
             self.sink_name_entry.icursor(tk.END)
@@ -4439,7 +4584,7 @@ class MainWindow:
 
         # If the name looks auto-generated, ensure proper placeholder styling
         if current_name and current_name.endswith(" (auto)"):
-            self.sink_name_entry.config(foreground="gray")
+            self._set_name_field_normal()
         elif not current_name or not self.user_has_custom_name:
             # Reset to auto-naming if field is empty or not customized
             self.user_has_custom_name = False

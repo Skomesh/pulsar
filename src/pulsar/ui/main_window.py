@@ -558,16 +558,13 @@ class MainWindow:
         self.channels_custom_entry = ttk.Entry(
             self.advanced_frame, textvariable=self.channels_custom_var, width=10,
         )
-        self.channels_custom_hint = ttk.Label(
-            self.advanced_frame,
-            text="(1 to 16)",
-            font=("", 8),
-        )
         # Start hidden: "2" is selected, so the custom field has no meaning
         # yet and showing it would only invite confusion.
         self.channels_custom_label.grid_remove()
         self.channels_custom_entry.grid_remove()
-        self.channels_custom_hint.grid_remove()
+        # The row offset applied to everything below the Channels row when
+        # the custom field is shown. 0 means the field is hidden.
+        self._advanced_row_offset = 0
 
         # Channel Map
         # Channel Map — preset dropdown + custom entry. The map tells
@@ -575,7 +572,9 @@ class MainWindow:
         # (front-left, front-right, etc). Without it, PA picks a default
         # based on channel count, but for surround setups the user often
         # wants explicit control.
-        ttk.Label(self.advanced_frame, text="Channel Map:").grid(
+        self.channel_map_label = ttk.Label(
+            self.advanced_frame, text="Channel Map:")
+        self.channel_map_label.grid(
             row=3, column=0, sticky=tk.W, pady=5
         )
         # The map labels are "preset name — channel_layout". We split on
@@ -675,12 +674,15 @@ class MainWindow:
         # Additional Properties (moved to row 5 to make room for
         # the custom channel-map entry that appears below the
         # channel-map combo when "Custom" is selected).
-        ttk.Label(self.advanced_frame, text="Additional Properties:").grid(
+        self.properties_label = ttk.Label(
+            self.advanced_frame, text="Additional Properties:")
+        self.properties_label.grid(
             row=5, column=0, sticky=tk.W, pady=5
         )
         self.properties_var = tk.StringVar()
-        properties_entry = ttk.Entry(self.advanced_frame, textvariable=self.properties_var, width=30)
-        properties_entry.grid(row=5, column=1, sticky=(tk.W, tk.E), padx=5, pady=5)
+        self.properties_entry = ttk.Entry(
+            self.advanced_frame, textvariable=self.properties_var, width=30)
+        self.properties_entry.grid(row=5, column=1, sticky=(tk.W, tk.E), padx=5, pady=5)
 
         # The gray "e.g., device.description='My Custom Sink'" hint that
         # used to sit under this entry is gone. It was a second static
@@ -694,7 +696,9 @@ class MainWindow:
         # with sample rate because higher rates have tighter per-frame
         # deadlines (21μs at 48kHz, 5μs at 192kHz) while per-frame
         # DSP cost is roughly constant.
-        ttk.Label(self.advanced_frame, text="Loopback Latency:").grid(
+        self.latency_label = ttk.Label(
+            self.advanced_frame, text="Loopback Latency:")
+        self.latency_label.grid(
             row=7, column=0, sticky=tk.W, pady=5
         )
         # Build the preset list. The "Auto" option picks the
@@ -2320,24 +2324,52 @@ class MainWindow:
             return self._create_device_of_type("both")
 
     def _show_custom_channels_field(self, show: bool):
-        """Show or hide the custom channel row.
+        """Show or hide the custom channel row, reflowing what is below it.
 
         grid_remove rather than a disabled state: a greyed-out field on
         screen still reads as "a field that is somehow not active", which
         is the impression the right-hand layout gave. Hidden is hidden.
+
+        The reflow is the fiddly part. Tk's grid does not reflow: a
+        widget keeps the row it was given. The custom field therefore
+        takes the row the Channel Map was using, and everything below
+        moves down one -- otherwise the two overlap and the rows beneath
+        them are covered rather than pushed aside.
+
+        A row offset is used rather than a second set of hard-coded
+        positions, so there is one number to change and the rows cannot
+        drift out of step with each other.
         """
-        for widget in (self.channels_custom_label, self.channels_custom_entry,
-                       self.channels_custom_hint):
+        self._advanced_row_offset = 1 if show else 0
+
+        for widget in (self.channels_custom_label, self.channels_custom_entry):
             if show:
                 widget.grid()
             else:
                 widget.grid_remove()
         if show:
-            self.channels_custom_label.grid(row=3, column=0, sticky=tk.W, pady=5)
+            self.channels_custom_label.grid(
+                row=3, column=0, sticky=tk.W, pady=5)
             self.channels_custom_entry.grid(
                 row=3, column=1, sticky=tk.W, padx=5, pady=5)
-            self.channels_custom_hint.grid(
-                row=3, column=2, sticky=tk.W, pady=5)
+
+        # Push everything below the Channels row down (or back up).
+        offset = self._advanced_row_offset
+        self.channel_map_label.grid_configure(row=3 + offset)
+        self.channel_map_combo.grid_configure(row=3 + offset)
+        self.properties_label.grid_configure(row=5 + offset)
+        self.properties_entry.grid_configure(row=5 + offset)
+        self.latency_label.grid_configure(row=7 + offset)
+        self.latency_combo.grid_configure(row=7 + offset)
+
+        # The two custom entries are gridded by their own handlers, so
+        # they have to follow the offset too.
+        if self.channel_map_custom_entry.winfo_manager() == "grid":
+            self.channel_map_custom_entry.grid_configure(row=4 + offset)
+        if self.latency_custom_entry.winfo_manager() == "grid":
+            self.latency_custom_entry.grid_configure(row=8 + offset)
+
+        if show:
             self.channels_custom_entry.focus_set()
 
     def _set_name_field_normal(self):
@@ -4147,7 +4179,8 @@ class MainWindow:
                 if layout == "__custom__":
                     # Show the custom entry
                     self.channel_map_custom_entry.grid(
-                        row=4, column=1, sticky=(tk.W, tk.E), padx=5, pady=5
+                        row=4 + getattr(self, "_advanced_row_offset", 0),
+                        column=1, sticky=(tk.W, tk.E), padx=5, pady=5
                     )
                 else:
                     # Hide the custom entry (if visible)
@@ -4201,7 +4234,8 @@ class MainWindow:
                     except AttributeError:
                         self.latency_var.set("50")
                     self.latency_custom_entry.grid(
-                        row=8, column=1, sticky=tk.W, padx=5, pady=5
+                        row=8 + getattr(self, "_advanced_row_offset", 0),
+                        column=1, sticky=tk.W, padx=5, pady=5
                     )
                 else:
                     self.latency_custom_entry.grid_remove()

@@ -12,7 +12,6 @@ Run: /usr/bin/python3 packaging/simulate_build.py
 import os
 import pathlib
 import re
-import shutil
 import subprocess
 import sys
 import tempfile

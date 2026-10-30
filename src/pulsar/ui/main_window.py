@@ -1092,6 +1092,11 @@ class MainWindow:
         # Keyed by sink name (rebuilt when the user selects a sink).
         self._multi_routed_targets: List[str] = []
 
+        # Which sink the listbox's current contents and checkmarks
+        # belong to. When the selection moves to another sink, the
+        # checkmarks for the old one must not be carried over.
+        self._multi_listbox_sink: Optional[str] = None
+
         multi_buttons = ttk.Frame(self.multi_routing_frame)
         multi_buttons.pack(fill=tk.X, padx=5, pady=2)
         self.multi_apply_button = ttk.Button(
@@ -2619,7 +2624,15 @@ class MainWindow:
             outputs = []
             self.add_output(f"Multi-output routing: failed to list outputs: {e}")
 
+        # The pre-checked targets belong to ONE sink. When the selected
+        # sink changes, the previous sink's checkmarks are meaningless --
+        # carrying them over would route the new sink to the old sink's
+        # targets. So the preserved selection is only kept while the
+        # selection is unchanged.
         prior = set(self.multi_routing_listbox.curselection())
+        if getattr(self, "_routing_sink_name", None) != self._multi_listbox_sink:
+            prior = set()
+
         self.multi_routing_listbox.delete(0, tk.END)
         for i, name in enumerate(outputs):
             self.multi_routing_listbox.insert(tk.END, name)
@@ -2628,6 +2641,7 @@ class MainWindow:
 
         # Pre-check the outputs this sink is already routed to.
         sink = getattr(self, "_routing_sink_name", None)
+        self._multi_listbox_sink = sink
         if sink:
             try:
                 monitor = PactlRunner.monitor_source_for(sink)
@@ -2644,6 +2658,59 @@ class MainWindow:
                 for i, name in enumerate(outputs):
                     if name in active:
                         self.multi_routing_listbox.selection_set(i)
+
+        self._update_multi_routing_buttons(outputs)
+
+    def _update_multi_routing_buttons(self, outputs=None):
+        """Enable or disable the Multi-output Routing buttons.
+
+        These buttons used to be enabled as a side effect of
+        update_routing_panel, which was deleted along with the
+        single-output panel it also drove. Nothing replaced that, so
+        both buttons were created with state="disabled" and nothing ever
+        set them back to "normal". The panel looked complete -- the
+        listbox was populated with the hardware outputs -- and the
+        button that made it do anything was permanently greyed out.
+
+        The rules:
+
+          Apply to Selected  needs a virtual sink selected AND at least
+                             one hardware output to route it to.
+          Stop All Routing   needs a virtual sink selected AND at least
+                             one route already in place to take away.
+                             With no route there is nothing to stop, so
+                             the button would just report that.
+
+        `outputs` is passed in by the caller when it already has the
+        list, to avoid listing the hardware twice per refresh.
+        """
+        sink = getattr(self, "_routing_sink_name", None)
+        if outputs is None:
+            try:
+                outputs = PactlRunner.list_hardware_outputs()
+            except Exception:
+                outputs = []
+
+        can_route = bool(sink) and bool(outputs)
+        self.multi_apply_button.config(
+            state="normal" if can_route else "disabled")
+
+        has_routes = False
+        if sink:
+            try:
+                monitor = PactlRunner.monitor_source_for(sink)
+            except Exception:
+                monitor = None
+            if monitor:
+                try:
+                    has_routes = any(
+                        lb.get("source") == monitor
+                        for lb in PactlRunner.list_loopbacks()
+                    )
+                except Exception:
+                    has_routes = False
+        self.multi_stop_all_button.config(
+            state="normal" if (can_route and has_routes) else "disabled")
 
     def _map_modules_to_devices(self, modules, sinks, sources):
         """
@@ -3065,6 +3132,7 @@ class MainWindow:
             self.unload_button.config(state="disabled")
             self._routing_sink_name = None
             self.update_device_controls_panel(None)
+            self._update_multi_routing_buttons()
             return
 
         # Get the selected item
@@ -3076,6 +3144,7 @@ class MainWindow:
             self.unload_button.config(state="disabled")
             self._routing_sink_name = None
             self.update_device_controls_panel(None)
+            self._update_multi_routing_buttons()
             return
 
         entity_id, entity_type, entity_name = values
@@ -3097,6 +3166,13 @@ class MainWindow:
             self._routing_sink_name = entity_name
         else:
             self._routing_sink_name = None
+
+        # The routing panel has to follow the selection: the buttons'
+        # enabled state depends on which sink is selected, and the
+        # pre-checked targets belong to that sink. update_routing_panel
+        # used to do all of this and was deleted with the single-output
+        # panel, leaving the buttons permanently disabled.
+        self._refresh_multi_routing_outputs()
 
         # Update device controls panel — works for both sinks and sources
         # so the user can adjust a null-sink's playback volume OR a

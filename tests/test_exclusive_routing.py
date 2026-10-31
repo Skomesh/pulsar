@@ -332,6 +332,12 @@ class TestRoutingDoesNotTouchOtherApps(unittest.TestCase):
 
             def fake_apply(plan, logger=None, move=None):
                 captured["move"] = move
+                # The real apply_plan calls move between the removals
+                # and the creations. A stand-in that does not leaves
+                # the handler unable to tell an accepted move from a
+                # refused one, so the refusal test passed either way.
+                if move is not None and plan.primary:
+                    move(plan.primary)
                 return (0, 0)
 
             with mock.patch(
@@ -346,10 +352,6 @@ class TestRoutingDoesNotTouchOtherApps(unittest.TestCase):
                     side_effect=fake_apply,
                 ):
                     win._on_capture_route_to_outputs_clicked()
-                # The move is done by apply_plan, which is mocked here,
-                # so the callback is invoked directly to exercise it.
-                if captured.get("move"):
-                    captured["move"]("alsa_output.pci-Built-in")
             return p.move, p.msgbox
 
     def test_does_not_move_another_apps_stream(self):
@@ -394,7 +396,10 @@ class TestRoutingDoesNotTouchOtherApps(unittest.TestCase):
         win = make_window(node=make_stream_node(node_id=99))
         move, mb = self._click(win)  # only a pw-play stream exists
         move.assert_not_called()
-        self.assertTrue(mb.showerror.called)
+        self.assertIn(
+            "No playing stream found",
+            mb.showerror.call_args[0][1],
+        )
 
     def test_no_loopback_is_created(self):
         """Routing an app must not ALSO leave a sink-level loopback.
@@ -408,9 +413,27 @@ class TestRoutingDoesNotTouchOtherApps(unittest.TestCase):
         lb.assert_not_called()
 
     def test_server_refusal_is_surfaced(self):
+        """The server refused the move -- say so.
+
+        The mocked apply_plan now calls the move callback, so this
+        only passes when the server really did refuse. It used to
+        pass either way, because the handler showed the error
+        unconditionally.
+        """
         win = make_window()
         move, mb = self._click(win, move_ok=False)
-        self.assertTrue(mb.showerror.called)
+        move.assert_called_once()
+        self.assertIn(
+            "refused to move",
+            mb.showerror.call_args[0][1],
+        )
+
+    def test_a_server_that_accepts_the_move_is_not_reported_as_a_refusal(self):
+        """The other half of the contract."""
+        win = make_window()
+        move, mb = self._click(win, move_ok=True)
+        move.assert_called_once()
+        mb.showerror.assert_not_called()
 
 
 if __name__ == "__main__":

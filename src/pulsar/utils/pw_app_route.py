@@ -293,56 +293,6 @@ def channels_for(
     return pairs
 
 
-def link_plan(
-    ports: Dict[int, StreamPort],
-    node_names: Dict[int, str],
-    stream_node_id: int,
-    target_sinks: Sequence[str],
-    existing_links: Set[Tuple[int, int]],
-) -> RoutePlan:
-    """Work out which links to create and which to break.
-
-    A link to a sink that is NOT a target is broken, which is what makes
-    routing exclusive -- the app stops being heard on the sink the
-    session manager put it on.
-
-    Links belonging to OTHER streams are never touched: only links whose
-    output port belongs to ``stream_node_id`` are considered.
-    """
-    plan = RoutePlan()
-
-    stream_out_ports = [
-        p.id for p in ports.values()
-        if p.node_id == stream_node_id and p.direction == "out"
-    ]
-
-    # Nodes that receive audio: their input ports are the link targets.
-    sink_node_ids = {
-        node_id for node_id, name in node_names.items()
-        if name in target_sinks
-    }
-    target_in_ports = [
-        p.id for p in ports.values()
-        if p.node_id in sink_node_ids and p.direction == "in"
-    ]
-
-    for out_id, in_id in channels_for(ports, stream_out_ports, target_in_ports):
-        if (out_id, in_id) not in existing_links:
-            plan.create.append((out_id, in_id))
-
-    # Break this stream's links to sinks that are not targets.
-    target_port_ids = {
-        p.id for p in ports.values()
-        if p.node_id in sink_node_ids and p.direction == "in"
-    }
-    for out_id, in_id in sorted(existing_links):
-        if out_id not in stream_out_ports:
-            continue  # belongs to a different app -- leave it alone
-        if in_id in target_port_ids:
-            continue  # already going where we want it
-        plan.remove.append((out_id, in_id))
-
-    return plan
 
 
 def plan_route(

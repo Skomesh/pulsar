@@ -149,9 +149,15 @@ class TestPortalCapture(unittest.TestCase):
             for c in mock_run.call_args_list
             if c.args and isinstance(c.args[0], list)
         ]
+        # Search the whole argv. The method name is at index 7
+        # (gdbus call --session --dest D --object-path P --method M),
+        # so index 5 is the literal "--object-path" and the old
+        # assertion could never fire: it passed even when
+        # create_session really did call CreateSession.
         create_session_called = any(
-            "CreateSession" in (cmd[5] if len(cmd) > 5 else "")
+            "CreateSession" in part
             for cmd in called_methods
+            for part in cmd
         )
         self.assertFalse(
             create_session_called,

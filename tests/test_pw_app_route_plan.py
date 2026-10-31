@@ -37,7 +37,6 @@ from unittest import mock
 from pulsar.utils import pw_app_route
 from pulsar.utils.pw_app_route import (
     RoutePlan,
-    link_plan,
     parse_links,
     parse_ports,
     plan_route,
@@ -306,18 +305,6 @@ class TestApplyPlan(unittest.TestCase):
         ):
             pw_app_route.apply_plan(plan, move=lambda s: moved.append(s))
         self.assertEqual(moved, [])
-
-
-class TestLinkPlanStillHolds(unittest.TestCase):
-    """The lower-level helper the planner is built on."""
-
-    def test_create_and_remove(self):
-        ports = _ports()
-        plan = link_plan(
-            ports, _names(), stream_node_id=61,
-            target_sinks=["tgt_b"], existing_links=set(),
-        )
-        self.assertEqual(sorted(plan.create), [(68, 80), (85, 88)])
 
 
 if __name__ == "__main__":

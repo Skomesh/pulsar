@@ -105,6 +105,18 @@ def make_window(node=None, selected_outputs=()):
     return win
 
 
+def _apply_that_moves(plan, logger=None, move=None):
+    """An apply_plan stand-in that calls the move callback.
+
+    The real apply_plan calls `move` between the removals and the
+    creations. A stand-in that does not would leave the handler
+    unable to tell an accepted move from a refused one.
+    """
+    if move is not None and plan.primary:
+        move(plan.primary)
+    return (0, 0)
+
+
 class _Server:
     """The mocked server calls the handler makes."""
 
@@ -194,7 +206,15 @@ class TestRouteAppToOutputs(unittest.TestCase):
                     win._on_capture_route_to_outputs_clicked()
                     return srv, plan, apply
 
-    def test_no_selection_is_reported(self):
+    def test_no_output_selected_is_reported(self):
+        """No output chosen.
+
+        The test used to be called `test_no_selection_is_reported`,
+        which is what it was assumed to check. It does not: the fake
+        tree always has a row selected, so this window has an APP
+        selected and no OUTPUT selected. Both conditions were asserted
+        with the same predicate, so nothing noticed.
+        """
         win = make_window()
         with _Server() as srv:
             with mock.patch(
@@ -202,7 +222,14 @@ class TestRouteAppToOutputs(unittest.TestCase):
             ) as apply:
                 win._on_capture_route_to_outputs_clicked()
         apply.assert_not_called()
-        self.assertTrue(srv.msgbox.showinfo.called)
+        # The MESSAGE, not just that a dialog appeared. Two different
+        # conditions are reported through the same predicate, so the
+        # suite could not tell "no app selected" from "no output
+        # selected" -- and a regression that swapped them was invisible.
+        self.assertIn(
+            "No output selected",
+            srv.msgbox.showinfo.call_args[0][1],
+        )
 
     def test_no_stream_selected_is_reported(self):
         win = make_window()
@@ -213,7 +240,10 @@ class TestRouteAppToOutputs(unittest.TestCase):
             ) as apply:
                 win._on_capture_route_to_outputs_clicked()
         apply.assert_not_called()
-        self.assertTrue(srv.msgbox.showinfo.called)
+        self.assertIn(
+            "Select an app first",
+            srv.msgbox.showinfo.call_args[0][1],
+        )
 
     def test_the_targets_are_the_selected_outputs(self):
         win = make_window()
@@ -274,7 +304,10 @@ class TestRouteAppToOutputs(unittest.TestCase):
             ) as apply:
                 win._on_capture_route_to_outputs_clicked()
         apply.assert_not_called()
-        self.assertTrue(srv.msgbox.showerror.called)
+        self.assertIn(
+            "no longer exist",
+            srv.msgbox.showerror.call_args[0][1],
+        )
 
     def test_a_missing_stream_is_reported(self):
         """The app stopped playing between the refresh and the click."""
@@ -287,7 +320,10 @@ class TestRouteAppToOutputs(unittest.TestCase):
             ) as apply:
                 win._on_capture_route_to_outputs_clicked()
         apply.assert_not_called()
-        self.assertTrue(srv.msgbox.showerror.called)
+        self.assertIn(
+            "No playing stream found",
+            srv.msgbox.showerror.call_args[0][1],
+        )
 
     def test_the_session_manager_target_is_passed_in(self):
         """The planner needs to know which sink the session manager owns."""
@@ -381,7 +417,15 @@ class TestRouteAppToOutputs(unittest.TestCase):
 
     def test_a_server_refusal_is_surfaced(self):
         """The session manager refused the move -- say so, do not claim
-        success."""
+        success.
+
+        The mocked apply_plan has to CALL the move callback, the way
+        the real one does between the removals and the creations. It
+        did not, so the handler never learned the outcome of the move
+        and showed the error unconditionally -- the test passed
+        whether the server accepted the move or refused it, and the
+        "do not claim success" half of the contract was unpinned.
+        """
         win = make_window()
         win.capture_route_listbox._items = ["headphones"]
         win.capture_route_listbox._selected = (0,)
@@ -395,10 +439,39 @@ class TestRouteAppToOutputs(unittest.TestCase):
                 )
                 with mock.patch(
                     "pulsar.ui.main_window.pw_app_route.apply_plan",
-                    return_value=(0, 0),
+                    side_effect=_apply_that_moves,
                 ):
                     win._on_capture_route_to_outputs_clicked()
-        self.assertTrue(srv.msgbox.showerror.called)
+        srv.move.assert_called_once()
+        self.assertIn(
+            "refused to move",
+            srv.msgbox.showerror.call_args[0][1],
+        )
+
+    def test_a_server_that_accepts_the_move_is_not_reported_as_a_refusal(self):
+        """The other half: an accepted move must NOT raise an error.
+
+        Without this, the refusal test proves nothing -- it passed
+        with the server accepting too.
+        """
+        win = make_window()
+        win.capture_route_listbox._items = ["headphones"]
+        win.capture_route_listbox._selected = (0,)
+        with _Server(move_ok=True) as srv:
+            with mock.patch(
+                "pulsar.ui.main_window.pw_app_route.plan_route"
+            ) as plan:
+                plan.return_value = mock.Mock(
+                    primary="headphones", create=[], remove=[],
+                    needs_move=True,
+                )
+                with mock.patch(
+                    "pulsar.ui.main_window.pw_app_route.apply_plan",
+                    side_effect=_apply_that_moves,
+                ):
+                    win._on_capture_route_to_outputs_clicked()
+        srv.move.assert_called_once()
+        srv.msgbox.showerror.assert_not_called()
 
 
 class TestRouteButtonEnablement(unittest.TestCase):

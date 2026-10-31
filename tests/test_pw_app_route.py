@@ -23,7 +23,6 @@ from pulsar.utils import pw_app_route
 from pulsar.utils.pw_app_route import (
     StreamPort,
     channels_for,
-    link_plan,
     parse_links,
     parse_ports,
 )
@@ -290,94 +289,6 @@ class TestParseLinks(unittest.TestCase):
     def test_ignores_lines_that_are_not_links(self):
         links = parse_links("  94 vsink_a:playback_FL\n")
         self.assertEqual(links, set())
-
-
-class TestLinkPlan(unittest.TestCase):
-    """The plan says exactly which links to make and which to break."""
-
-    def setUp(self):
-        self.ports = {
-            68: StreamPort(68, 61, "output_FL", "out"),
-            85: StreamPort(85, 61, "output_FR", "out"),
-            45: StreamPort(45, 94, "playback_FL", "in"),
-            72: StreamPort(72, 94, "playback_FR", "in"),
-            80: StreamPort(80, 95, "playback_FL", "in"),
-            88: StreamPort(88, 95, "playback_FR", "in"),
-        }
-        self.nodes = {
-            94: "vsink_a",
-            95: "vsink_b",
-            61: "paplay",
-        }
-
-    def test_creates_a_link_per_channel_to_the_target(self):
-        plan = link_plan(
-            self.ports, self.nodes, stream_node_id=61,
-            target_sinks=["vsink_b"], existing_links=set(),
-        )
-        self.assertEqual(sorted(plan.create), [(68, 80), (85, 88)])
-
-    def test_removes_the_link_to_the_previous_sink(self):
-        """Exclusive routing: the app must not stay on its old sink."""
-        plan = link_plan(
-            self.ports, self.nodes, stream_node_id=61,
-            target_sinks=["vsink_b"],
-            existing_links={(68, 94), (85, 72)},
-        )
-        self.assertEqual(sorted(plan.remove), [(68, 94), (85, 72)])
-
-    def test_keeps_links_to_a_target_that_is_already_linked(self):
-        """Re-routing to the same place is a no-op, not a duplicate."""
-        plan = link_plan(
-            self.ports, self.nodes, stream_node_id=61,
-            target_sinks=["vsink_b"],
-            existing_links={(68, 80), (85, 88)},
-        )
-        self.assertEqual(plan.create, [])
-        self.assertEqual(plan.remove, [])
-
-    def test_routes_to_two_sinks_at_once(self):
-        """The goal: one app, heard on two outputs simultaneously."""
-        plan = link_plan(
-            self.ports, self.nodes, stream_node_id=61,
-            target_sinks=["vsink_a", "vsink_b"],
-            existing_links=set(),
-        )
-        self.assertEqual(
-            sorted(plan.create), [(68, 45), (68, 80), (85, 72), (85, 88)]
-        )
-
-    def test_does_not_touch_another_apps_links(self):
-        """The whole point: app A's route survives app B being routed."""
-        other = {
-            200: StreamPort(200, 77, "output_FL", "out"),
-            201: StreamPort(201, 77, "output_FR", "out"),
-        }
-        ports = dict(self.ports)
-        ports.update(other)
-        plan = link_plan(
-            ports, self.nodes, stream_node_id=61,
-            target_sinks=["vsink_b"],
-            existing_links={(200, 94), (201, 72)},
-        )
-        self.assertEqual(plan.remove, [])
-        self.assertNotIn((200, 94), plan.remove)
-        self.assertNotIn((201, 72), plan.remove)
-
-    def test_unknown_target_sink_is_ignored(self):
-        plan = link_plan(
-            self.ports, self.nodes, stream_node_id=61,
-            target_sinks=["vsink_gone"], existing_links=set(),
-        )
-        self.assertEqual(plan.create, [])
-
-    def test_a_sink_without_input_ports_is_ignored(self):
-        """A node with no playback ports cannot receive audio."""
-        plan = link_plan(
-            self.ports, self.nodes, stream_node_id=61,
-            target_sinks=["paplay"], existing_links=set(),
-        )
-        self.assertEqual(plan.create, [])
 
 
 if __name__ == "__main__":

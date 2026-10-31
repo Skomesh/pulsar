@@ -199,7 +199,32 @@ def volume_percent(base_volume: Optional[str]) -> str:
     return f"{pct}%" if pct is not None else "-"
 
 
+def _require_audio_server() -> bool:
+    """Refuse to list devices when there is no server to list them from.
+
+    Every list_* method returns an empty list when pactl fails, so
+    `pulsar list sinks --json` printed {"count": 0, "sinks": []} and
+    exited 0 -- byte-identical to a system that genuinely has no sinks.
+    A script reading that could not tell a broken server from an empty
+    one, and would act on the difference without knowing it was there.
+
+    The GUI is not changed: it has nothing to show either way, and
+    saying "no devices" is better than an error dialog for a user
+    clicking Refresh.
+    """
+    if PactlRunner.server_reachable():
+        return True
+    print(
+        "Error: cannot reach the audio server. Is PulseAudio or PipeWire "
+        "running?",
+        file=sys.stderr,
+    )
+    return False
+
+
 def cmd_list_sinks(args) -> int:
+    if not _require_audio_server():
+        return EXIT_ERROR
     sinks = PactlRunner.list_sinks()
     # Keys are PactlRunner's, not guesses: `id` not `index`, `description`
     # not `desc`, `mute` not `muted`, `base_volume` not `volume`.
@@ -219,6 +244,8 @@ def cmd_list_sinks(args) -> int:
 
 
 def cmd_list_sources(args) -> int:
+    if not _require_audio_server():
+        return EXIT_ERROR
     sources = PactlRunner.list_sources()
     # `monitor_of_sink` is what separates a capture device from the monitor
     # of an output. They route differently and confusing the two is a
@@ -240,6 +267,8 @@ def cmd_list_sources(args) -> int:
 
 
 def cmd_list_cards(args) -> int:
+    if not _require_audio_server():
+        return EXIT_ERROR
     cards = PactlRunner.list_cards()
     rows = [
         [c.get("name", "?"), c.get("description", ""),
@@ -257,6 +286,8 @@ def cmd_list_cards(args) -> int:
 
 
 def cmd_list_streams(args) -> int:
+    if not _require_audio_server():
+        return EXIT_ERROR
     streams = PactlRunner.list_sink_inputs()
     rows = [
         [s.get("index", "?"), s.get("application", "") or "-",
@@ -274,6 +305,8 @@ def cmd_list_streams(args) -> int:
 
 
 def cmd_list_routes(args) -> int:
+    if not _require_audio_server():
+        return EXIT_ERROR
     routes = PactlRunner.list_loopbacks()
     rows = [[r.get("id", "?"), r.get("source", "?"), r.get("sink", "?")]
             for r in routes]

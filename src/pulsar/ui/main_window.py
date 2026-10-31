@@ -13,7 +13,7 @@ from pulsar.utils import pw_app_route
 from pulsar.utils.device_names import classify_device_name, detect_device_type
 from pulsar.utils.pactl_runner import LoopbackCycleError, PactlRunner
 from pulsar.utils.preset_manager import PresetManager
-from pulsar.utils.profile_manager import ProfileManager
+from pulsar.utils.profile_manager import ProfileError, ProfileManager
 from pulsar.utils.pw_app_capture import (
     PwDumpUnavailable,
     discover_app_audio_nodes,
@@ -1422,22 +1422,41 @@ class MainWindow:
             messagebox.showwarning("Save Profile", "Profile name cannot be empty.")
             return
 
+        self._save_profile_named(name, desc_var.get().strip())
+
+    def _save_profile_named(self, name: str, description: str = "") -> bool:
+        """Capture the current state and save it under `name`.
+
+        `ProfileManager.save_profile` raises ProfileError for a name
+        outside the allowed set. The name comes from a text entry, so
+        that is user input, and a refusal has to be REPORTED. It used to
+        be raised out of the Tk callback instead: no dialog, no profile
+        saved, and nothing said about why -- typing an ordinary name
+        like "My Game Profile" just did nothing.
+        """
         try:
             profile = self.profile_manager.capture_topology(
-                name, description=desc_var.get().strip()
+                name, description=description
             )
         except Exception as e:
             messagebox.showerror("Save Profile", f"Failed to capture state: {e}")
-            return
+            return False
 
-        if not self.profile_manager.save_profile(name, profile):
+        try:
+            saved = self.profile_manager.save_profile(name, profile)
+        except ProfileError as e:
+            messagebox.showerror("Save Profile", str(e))
+            return False
+
+        if not saved:
             messagebox.showerror("Save Profile", f"Failed to save profile '{name}'.")
-            return
+            return False
 
         self.add_output(
             f"Saved profile '{name}': {len(profile['devices'])} devices, "
             f"{len(profile['routing'])} loopbacks"
         )
+        return True
         self.status_var.set(f"Saved profile '{name}'")
         self.refresh_profile_list()
 
@@ -1810,6 +1829,19 @@ class MainWindow:
         # The output list can be stale — a device unplugged since the
         # last refresh. Routing to a sink that is gone silently does
         # nothing, and the user would be told it worked.
+        #
+        # An EMPTY list is ambiguous: it means either "there are no
+        # sinks" or "pactl failed and we could not look". The second
+        # used to be reported as "the output no longer exists", which
+        # is the wrong diagnosis entirely — and the route was refused
+        # for the wrong reason.
+        if not PactlRunner.server_reachable(logger=self.add_output):
+            messagebox.showerror(
+                "Route App Audio",
+                "Could not reach the audio server, so the output list "
+                "could not be checked. Nothing was changed.",
+            )
+            return
         live_sinks = {
             s.get("name", "")
             for s in PactlRunner.list_sinks(logger=self.add_output)
@@ -1855,9 +1887,7 @@ class MainWindow:
             dump = pw_app_route._run_pw_dump(logger=self.add_output)
             ports = pw_app_route.parse_ports(dump)
             names = pw_app_route.parse_node_names(dump)
-            links = pw_app_route.parse_links(
-                pw_app_route._run_pw_link(["-l", "-I"], self.add_output).stdout
-            )
+            links = pw_app_route.read_links(logger=self.add_output)
         except pw_app_route.PwLinkUnavailable as e:
             messagebox.showerror("Route App Audio", str(e))
             return
@@ -1911,7 +1941,21 @@ class MainWindow:
             )
         else:
             self.add_output(f"{app_str} already routed to {summary}")
-        self.status_var.set(f"{app_str} now outputs to {summary}")
+
+        # The status line must not claim more than was achieved.
+        # `targets` is what the user SELECTED. The app is only on a
+        # target if the session manager moved it there, or a link to it
+        # was created. The multi-routing path was fixed for exactly
+        # this; the capture path was not.
+        achieved = created
+        if plan.primary and (not plan.needs_move or moved["ok"]):
+            achieved += 1
+        if achieved == len(targets):
+            self.status_var.set(f"{app_str} now outputs to {summary}")
+        else:
+            self.status_var.set(
+                f"{app_str} routed to {achieved} of {len(targets)} output(s)"
+            )
         self._refresh_capture_tree()
 
     def _on_capture_route_refresh_outputs(self):
@@ -2002,6 +2046,23 @@ class MainWindow:
         # producing audio). An input stream has nothing to route to an
         # output device.
         self._update_capture_route_button_state()
+
+    def _copy_to_clipboard(self, text, label=""):
+        """Put `text` on the clipboard and say what was copied.
+
+        The Capture tab's Copy Node ID and Copy Node Name buttons call
+        this. It did not exist anywhere in the repository, so both
+        buttons raised AttributeError inside their Tk callback: nothing
+        was copied, and the user got a traceback instead of the node ID
+        they wanted to paste into OBS.
+        """
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        # The clipboard belongs to the X server, not to this process.
+        # Without an explicit update it is gone when the app exits.
+        self.root.update()
+        if label:
+            self.add_output(f"Copied {label} to the clipboard.")
 
     def _copy_selected_capture_node_id(self):
         sel = self.capture_tree.selection()
@@ -2620,14 +2681,23 @@ class MainWindow:
         # carrying them over would route the new sink to the old sink's
         # targets. So the preserved selection is only kept while the
         # selection is unchanged.
-        prior = set(self.multi_routing_listbox.curselection())
+        # The selection is preserved by NAME, not by index. The list is
+        # rebuilt from a fresh listing, so an index that still exists
+        # can name a different device: a headset unplugged and an HDMI
+        # output taking its slot would silently move the checkmark, and
+        # Apply would then route the audio to a device the user never
+        # selected.
+        prior = {
+            self.multi_routing_listbox.get(i)
+            for i in self.multi_routing_listbox.curselection()
+        }
         if getattr(self, "_routing_sink_name", None) != self._multi_listbox_sink:
             prior = set()
 
         self.multi_routing_listbox.delete(0, tk.END)
         for i, name in enumerate(outputs):
             self.multi_routing_listbox.insert(tk.END, name)
-            if i in prior:
+            if name in prior:
                 self.multi_routing_listbox.selection_set(i)
 
         # Pre-check the outputs this sink is already routed to.
@@ -5303,20 +5373,41 @@ class MainWindow:
         return classify_device_name(device_name, device_data or {})
 
     def _devices_match(self, device_info1, device_info2):
-        """Check if two device info objects represent the same physical device."""
+        """Check if two device info objects represent the same physical device.
+
+        The two producers of a device_info dict do not carry the same
+        keys. `classify_device_name` -- used for sinks and sources --
+        supplies `device_identifier` and `connection_part`.
+        `_extract_hardware_device_info` -- used for hardware modules --
+        supplies `device_key`, `device_string` and `properties` instead,
+        and has no `device_identifier` at all.
+
+        Indexing `device_identifier` directly raised KeyError on the
+        module side. The call sits in `_categorize_hardware_devices`,
+        which runs from `refresh_all_views` while the window is being
+        built, so the application failed to START on a machine with two
+        or more hardware modules.
+
+        So every comparison is made only when BOTH sides carry the key.
+        A comparison that cannot be made is not a match; it is never a
+        reason to crash.
+        """
         # Primary match: same device identifier
-        if device_info1['device_identifier'] == device_info2['device_identifier']:
+        id1 = device_info1.get('device_identifier')
+        id2 = device_info2.get('device_identifier')
+        if id1 and id2 and id1 == id2:
             return True
 
         # Secondary match: same connection part (for PipeWire ALSA devices)
-        if (device_info1.get('connection_part') and device_info2.get('connection_part') and
-            device_info1['connection_part'] == device_info2['connection_part']):
+        part1 = device_info1.get('connection_part')
+        part2 = device_info2.get('connection_part')
+        if part1 and part2 and part1 == part2:
             return True
 
         # Tertiary match: similar device names
-        name1 = device_info1['device_name'].lower()
-        name2 = device_info2['device_name'].lower()
-        if name1 == name2:
+        name1 = (device_info1.get('device_name') or '').lower()
+        name2 = (device_info2.get('device_name') or '').lower()
+        if name1 and name1 == name2:
             return True
 
         return False

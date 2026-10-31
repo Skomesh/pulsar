@@ -154,7 +154,15 @@ def read_json_dict(path, label: str = "") -> Tuple[Dict[str, Any], Optional[str]
     try:
         with open(path) as handle:
             data = json.load(handle)
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        # UnicodeDecodeError is NOT a JSONDecodeError -- it subclasses
+        # ValueError -- so it used to be raised straight through here.
+        # A presets file containing non-UTF-8 bytes then took the
+        # preset list down with it, and the preset list is read while
+        # the window is being built: the window never opened. The
+        # docstring above promises {} "rather than raising when the
+        # file is missing, unreadable, not valid JSON" -- a binary
+        # file is unreadable, and belongs here.
         reason = str(exc)
         where = f" for {label}" if label else ""
         print(f"WARNING: could not read {path}{where}: {reason}")

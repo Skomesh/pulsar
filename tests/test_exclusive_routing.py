@@ -292,6 +292,12 @@ class _PactlPatch:
         self.stack.enter_context(mock.patch.object(
             pw_app_route, "pw_link_available", return_value=True
         ))
+        # The handler checks that the audio server answers before it
+        # believes the output list; the real check runs `pactl info`,
+        # which fails under the CI simulation.
+        self.stack.enter_context(mock.patch.object(
+            PactlRunner, "server_reachable", return_value=True
+        ))
         # Reading the graph (pw-dump) and the live link list (pw-link)
         # must not shell out here: a CI runner has neither tool
         # installed, so a real call would raise and the handler would

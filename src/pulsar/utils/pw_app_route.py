@@ -137,6 +137,30 @@ def _run_pw_link(args: Sequence[str], logger=None) -> subprocess.CompletedProces
         raise PwLinkUnavailable(f"pw-link failed: {e}") from e
 
 
+def read_links(logger=None) -> Set[Tuple[int, int]]:
+    """The native links that exist now, as (output_port, input_port).
+
+    A `pw-link -l` that FAILS must not be read as "there are no links".
+    The return code was not checked, so a broken tool produced an empty
+    set, the planner concluded the stream had no existing links, and
+    the step that breaks the wrong links was skipped. The app kept
+    playing to the old sink while the user was told the route had
+    been changed.
+
+    This is the same class of bug as the one fixed in `_run_pw_dump`:
+    the tool that could not answer was indistinguishable from an
+    answer of "nothing".
+    """
+    result = _run_pw_link(["-l", "-I"], logger)
+    if result.returncode != 0:
+        detail = (result.stderr or "").strip()
+        raise PwLinkUnavailable(
+            f"pw-link -l failed (status {result.returncode})"
+            + (f": {detail}" if detail else "")
+        )
+    return parse_links(result.stdout)
+
+
 def parse_ports(pw_dump_output: str) -> Dict[int, StreamPort]:
     """Parse pw-dump output into {port_id: StreamPort}."""
     try:
@@ -484,18 +508,35 @@ def apply_plan(plan: RoutePlan, logger=None, move=None) -> Tuple[int, int]:
     """
     created = 0
     removed = 0
+    failures = []
     for out_id, in_id in plan.remove:
         result = _run_pw_link(["-d", str(out_id), str(in_id)], logger)
         if result.returncode == 0:
             removed += 1
-        elif logger:
-            logger(f"pw-link -d {out_id} {in_id} failed: {result.stderr.strip()}")
+        else:
+            detail = (result.stderr or "").strip()
+            failures.append(f"could not remove link {out_id}->{in_id}: {detail}")
+            if logger:
+                logger(f"pw-link -d {out_id} {in_id} failed: {detail}")
     if move is not None and plan.primary and plan.needs_move:
         move(plan.primary)
     for out_id, in_id in plan.create:
         result = _run_pw_link([str(out_id), str(in_id)], logger)
         if result.returncode == 0:
             created += 1
-        elif logger:
-            logger(f"pw-link {out_id} {in_id} failed: {result.stderr.strip()}")
+        else:
+            detail = (result.stderr or "").strip()
+            failures.append(f"could not create link {out_id}->{in_id}: {detail}")
+            if logger:
+                logger(f"pw-link {out_id} {in_id} failed: {detail}")
+
+    # A link that failed is not a link that was made. Reporting the
+    # counts and letting the caller say "routed" would be reporting
+    # success after a failure -- the app was left on some of the old
+    # links and none of the new ones.
+    if failures:
+        raise PwLinkUnavailable(
+            f"{len(failures)} link operation(s) failed, so the route was "
+            f"not applied completely: " + "; ".join(failures)
+        )
     return created, removed

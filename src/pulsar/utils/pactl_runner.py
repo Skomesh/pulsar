@@ -1119,11 +1119,34 @@ class PactlRunner:
             or unknown.
         """
         modules = PactlRunner.list_modules(logger)
+        # Match the ARGUMENT TOKEN, not a substring of it. `unload_null_sink_by_name`
+        # already does it this way, and the two must agree: with the
+        # substring test, `is_null_sink('game')` was True whenever a
+        # null-sink named `game_sink` existed, so a real hardware sink
+        # called `game` was treated as virtual and dropped from the
+        # "Route to" list with no explanation.
         marker = f'sink_name={sink_name}'
         for m in modules:
-            if m.get('name') == 'module-null-sink' and marker in m.get('argument', ''):
+            if m.get('name') != 'module-null-sink':
+                continue
+            if marker in set(m.get('argument', '').split()):
                 return True
         return False
+
+    @staticmethod
+    def server_reachable(logger=None) -> bool:
+        """True if pactl can reach the audio server.
+
+        Every list_* method returns an empty list when pactl fails. That
+        is right for the GUI, which has nothing to show either way, but
+        it makes "the server is gone" indistinguishable from "there are
+        no devices". A caller that has to tell the two apart -- the
+        CLI, which scripts; the routing handler, which otherwise tells
+        the user an output "no longer exists" when the truth is that it
+        could not look -- needs to ask.
+        """
+        _output, return_code = PactlRunner.run_command(['info'], logger)
+        return return_code == 0
 
     @staticmethod
     def monitor_source_for(sink_name: str, logger=None) -> Optional[str]:

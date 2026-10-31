@@ -126,6 +126,14 @@ class _Server:
         self.stack.enter_context(mock.patch.object(
             pw_app_route, "pw_link_available", return_value=True
         ))
+        # The handler checks that the audio server answers before it
+        # believes the output list. The real check runs `pactl info`,
+        # which fails under the CI simulation -- pactl is absent there
+        # -- and the handler would refuse before reaching the routing
+        # logic these tests are about.
+        self.stack.enter_context(mock.patch.object(
+            PactlRunner, "server_reachable", return_value=True
+        ))
         # The handler also READS the graph (pw-dump) and the live link
         # list (pw-link). Those must not shell out here: a CI runner
         # has neither tool installed, so a real call would raise and
@@ -235,6 +243,8 @@ class TestRouteAppToOutputs(unittest.TestCase):
             PactlRunner, "list_sinks",
             return_value=[{"name": "speakers"}, {"name": "headphones"}],
         ), mock.patch.object(
+            PactlRunner, "server_reachable", return_value=True
+        ), mock.patch.object(
             pw_app_route, "pw_link_available", return_value=False
         ):
             with mock.patch(
@@ -323,6 +333,33 @@ class TestRouteAppToOutputs(unittest.TestCase):
             self.assertEqual(args[1], "headphones")
 
     def test_the_status_line_reports_the_new_routing(self):
+        """Every selected output was achieved -- say so plainly."""
+        win = make_window()
+        win.capture_route_listbox._items = ["speakers", "headphones"]
+        win.capture_route_listbox._selected = (0, 1)
+        with _Server():
+            with mock.patch(
+                "pulsar.ui.main_window.pw_app_route.plan_route"
+            ) as plan:
+                plan.return_value = mock.Mock(
+                    primary="speakers", create=[(68, 80)], remove=[],
+                    needs_move=False,
+                )
+                with mock.patch(
+                    "pulsar.ui.main_window.pw_app_route.apply_plan",
+                    return_value=(1, 0),
+                ):
+                    win._on_capture_route_to_outputs_clicked()
+        self.assertIn("speakers", win.status_var.get())
+        self.assertIn("headphones", win.status_var.get())
+
+    def test_the_status_line_does_not_claim_a_target_that_was_not_achieved(self):
+        """The plan made no link to the second output, so do not claim it.
+
+        The status line used to name every SELECTED target regardless of
+        what was actually done. The multi-routing path was fixed for
+        exactly this; the capture path was not.
+        """
         win = make_window()
         win.capture_route_listbox._items = ["speakers", "headphones"]
         win.capture_route_listbox._selected = (0, 1)
@@ -339,8 +376,8 @@ class TestRouteAppToOutputs(unittest.TestCase):
                     return_value=(0, 0),
                 ):
                     win._on_capture_route_to_outputs_clicked()
-        self.assertIn("speakers", win.status_var.get())
-        self.assertIn("headphones", win.status_var.get())
+        status = win.status_var.get()
+        self.assertIn("1 of 2 output", status)
 
     def test_a_server_refusal_is_surfaced(self):
         """The session manager refused the move -- say so, do not claim

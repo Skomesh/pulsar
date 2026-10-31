@@ -245,16 +245,20 @@ class TestApplyPlan(unittest.TestCase):
         self.assertEqual(created, 2)
         self.assertEqual(removed, 1)
 
-    def test_a_failed_link_is_not_counted(self):
+    def test_a_failed_link_is_reported_not_swallowed(self):
+        """A link that failed must not be reported as a link that was made.
+
+        The counts used to come back as (0, 0) and the caller took the
+        "already routed" branch, telling the user the app was on the
+        new sink when it was on none of them. A failed link now raises,
+        so the caller reports the failure.
+        """
         with mock.patch.object(
             pw_app_route, "_run_pw_link",
             return_value=mock.Mock(returncode=1, stderr="boom"),
         ):
-            created, removed = pw_app_route.apply_plan(
-                RoutePlan(create=[(68, 80)])
-            )
-        self.assertEqual(created, 0)
-        self.assertEqual(removed, 0)
+            with self.assertRaises(pw_app_route.PwLinkUnavailable):
+                pw_app_route.apply_plan(RoutePlan(create=[(68, 80)]))
 
     def test_a_failure_is_logged(self):
         log = mock.Mock()
@@ -262,7 +266,10 @@ class TestApplyPlan(unittest.TestCase):
             pw_app_route, "_run_pw_link",
             return_value=mock.Mock(returncode=1, stderr="boom"),
         ):
-            pw_app_route.apply_plan(RoutePlan(create=[(68, 80)]), logger=log)
+            with self.assertRaises(pw_app_route.PwLinkUnavailable):
+                pw_app_route.apply_plan(
+                    RoutePlan(create=[(68, 80)]), logger=log
+                )
         log.assert_called_once()
         self.assertIn("boom", log.call_args[0][0])
 

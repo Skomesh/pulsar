@@ -1522,15 +1522,36 @@ class MainWindow:
         outer.rowconfigure(2, weight=1)      # the table absorbs the slack
 
         # A font tuple's FIRST element is a FAMILY, not a named font.
-        # ("TkDefaultFont", 9) therefore asks for a family called
-        # "TkDefaultFont", does not find one, and silently falls back
-        # to a fixed-width face -- the label renders monospace and
-        # nobody notices. Resolve the family properly.
-        family = tkfont.nametofont("TkDefaultFont").actual("family")
+        # ("TkDefaultFont", 9) asks for a family called "TkDefaultFont",
+        # does not find one, and silently falls back to a fixed-width
+        # face -- the label renders monospace and nobody notices.
+        #
+        # Copy the NAMED font rather than naming a size. A hard-coded
+        # 9pt label is 9pt whatever the user's font is, so on a system
+        # with a 16pt default these four widgets were the only thing
+        # on the tab that stayed small.
+        named_font = tkfont.nametofont("TkDefaultFont")
+        # `actual("size")` is in POINTS. A copied font can carry a
+        # pixel size instead, and a style configured with one measured
+        # 12pt when the default was 16pt -- so the heading's size is
+        # set explicitly, in points.
+        #
+        # The derived fonts are made by COPYING the named font and
+        # then configuring the copy. `tkfont.Font(font=<a font>,
+        # weight="bold", size=10)` silently ignores the keyword
+        # arguments -- the new font just adopts the source font's
+        # weight and size -- so the heading came out neither bold nor
+        # any larger.
+        base_size = named_font.actual("size")
+        base_font = named_font
+        bold_font = named_font.copy()
+        bold_font.configure(weight="bold")
+        heading_font = named_font.copy()
+        heading_font.configure(weight="bold", size=base_size + 1)
 
         style = ttk.Style()
-        style.configure("Pulsar.Primary.TButton", font=(family, 9, "bold"))
-        style.configure("Pulsar.Heading.TLabel", font=(family, 10, "bold"))
+        style.configure("Pulsar.Primary.TButton", font=bold_font)
+        style.configure("Pulsar.Heading.TLabel", font=heading_font)
 
         # One line of orientation, not a paragraph.
         ttk.Label(
@@ -1538,7 +1559,7 @@ class MainWindow:
             text=(
                 "Copy a PipeWire node ID into OBS, Discord or EasyEffect."
             ),
-            font=(family, 9),
+            font=base_font,
         ).grid(row=0, column=0, sticky=tk.W, pady=(0, 6))
 
         # ---- the table: the headline -------------------------------
@@ -1575,19 +1596,37 @@ class MainWindow:
         self.capture_tree.heading("app", text="Application")
         self.capture_tree.heading("class", text="Stream Class")
         self.capture_tree.heading("node_name", text="Node Name")
-        # The three fixed columns do not stretch, so Tk cannot squeeze
-        # them. Their widths used to total 780px into a 739px tree, and
-        # Tk shrank them all by a tenth -- which clipped the "PW Node
-        # ID" heading at the minimum window width, with no horizontal
-        # scrollbar to recover it. The node name takes what is left.
-        # The declared widths total 644 so that even the 700px minimum
-        # window leaves room for the scrollbar without Tk having to
-        # squeeze a column -- a squeezed column clips its heading, and
-        # there is no horizontal scrollbar to recover it.
-        self.capture_tree.column("id", width=84, anchor=tk.W, stretch=False)
-        self.capture_tree.column("app", width=150, anchor=tk.W, stretch=False)
-        self.capture_tree.column("class", width=150, anchor=tk.W, stretch=False)
-        self.capture_tree.column("node_name", width=260, anchor=tk.W)
+        # The column widths are derived from the MEASURED heading
+        # widths, and the same number is the minimum. A column narrower
+        # than its heading clips it, and a Treeview has no horizontal
+        # scrollbar to recover it -- so at a large system font the
+        # "PW Node ID" heading was clipped at every window size and
+        # could not be read back.
+        #
+        # The declared widths used to total 780px into a 739px tree.
+        # That excess is what starved the scrollbar: the tree asks for
+        # 782px, more than the cavity, so -- packed first, with
+        # expand=True -- it took the whole cavity and left the
+        # scrollbar 1px wide and unmapped. Fixing the widths AND
+        # packing the scrollbar first both matter.
+        def column_width(heading, minimum):
+            return max(minimum, base_font.measure(heading) + 14)
+
+        id_width = column_width("PW Node ID", 84)
+        app_width = column_width("Application", 120)
+        class_width = column_width("Stream Class", 130)
+        self.capture_tree.column(
+            "id", width=id_width, minwidth=id_width, anchor=tk.W
+        )
+        self.capture_tree.column(
+            "app", width=app_width, minwidth=app_width, anchor=tk.W
+        )
+        self.capture_tree.column(
+            "class", width=class_width, minwidth=class_width, anchor=tk.W
+        )
+        self.capture_tree.column(
+            "node_name", width=260, minwidth=80, anchor=tk.W
+        )
 
         # The scrollbar is packed FIRST. Packed after the tree -- which
         # was packed with expand=True -- it was starved to zero width
@@ -1609,7 +1648,7 @@ class MainWindow:
         # empty table it explains, which read as a page footer.
         self.capture_selected_var = tk.StringVar(value="(no stream selected)")
         ttk.Label(
-            outer, textvariable=self.capture_selected_var, font=(family, 9)
+            outer, textvariable=self.capture_selected_var, font=base_font
         ).grid(row=3, column=0, sticky=tk.W, pady=(6, 0))
 
         # ---- routing band ------------------------------------------
@@ -1634,38 +1673,15 @@ class MainWindow:
         band = ttk.Frame(outer)
         band.grid(row=6, column=0, sticky=tk.W)
 
-        outputs = ttk.Frame(band)
-        outputs.pack(side=tk.LEFT, fill=tk.BOTH)
-        list_holder = ttk.Frame(outputs)
-        list_holder.pack(side=tk.TOP, fill=tk.X)
-        self.capture_route_listbox = tk.Listbox(
-            list_holder, selectmode=tk.EXTENDED, height=4,
-            exportselection=False, width=42,
-        )
-        self.capture_route_listbox.pack(
-            side=tk.LEFT, fill=tk.BOTH, expand=False
-        )
-        listbox_scroll = ttk.Scrollbar(
-            list_holder, orient=tk.VERTICAL,
-            command=self.capture_route_listbox.yview,
-        )
-        listbox_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        self.capture_route_listbox.configure(yscrollcommand=listbox_scroll.set)
-        self.capture_route_listbox.bind(
-            "<<ListboxSelect>>", self._on_capture_route_selection_changed
-        )
-        # Filter checkbox -- when checked, only hardware outputs are
-        # shown. Unchecked (default) also includes virtual sinks for
-        # OBS-style capture setups.
-        self._capture_route_hardware_only_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            outputs, text="Show hardware outputs only",
-            variable=self._capture_route_hardware_only_var,
-            command=self._populate_capture_route_options,
-        ).pack(anchor=tk.W, pady=(4, 0))
-
+        # The actions are packed FIRST. The output listbox asks for
+        # 298px at the default font and 676px at a 20pt one, so packed
+        # first it took the row and squeezed the buttons down to 1px --
+        # unmapped, so "Remove Routing" simply was not on the screen.
+        # The buttons claim their width; the list takes what is left,
+        # and a list that is too narrow is a smaller problem than a
+        # button that is not there.
         actions = ttk.Frame(band)
-        actions.pack(side=tk.LEFT, fill=tk.Y, padx=(16, 0))
+        actions.pack(side=tk.RIGHT, fill=tk.Y, padx=(16, 0))
         self.capture_route_button = ttk.Button(
             actions, text="Route App Audio", width=16,
             style="Pulsar.Primary.TButton",
@@ -1681,6 +1697,39 @@ class MainWindow:
             command=self._on_capture_route_remove_clicked, state="disabled",
         )
         self.capture_route_remove_button.pack(side=tk.LEFT)
+
+        outputs = ttk.Frame(band)
+        outputs.pack(side=tk.LEFT, fill=tk.BOTH)
+        list_holder = ttk.Frame(outputs)
+        list_holder.pack(side=tk.TOP, fill=tk.X)
+        self.capture_route_listbox = tk.Listbox(
+            list_holder, selectmode=tk.EXTENDED, height=4,
+            exportselection=False, width=42,
+        )
+        listbox_scroll = ttk.Scrollbar(
+            list_holder, orient=tk.VERTICAL,
+            command=self.capture_route_listbox.yview,
+        )
+        # Packed before the listbox for the same reason as the tree's:
+        # a listbox that asks for more width than there is leaves its
+        # own scrollbar with nothing.
+        listbox_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.capture_route_listbox.pack(
+            side=tk.LEFT, fill=tk.BOTH, expand=False
+        )
+        self.capture_route_listbox.configure(yscrollcommand=listbox_scroll.set)
+        self.capture_route_listbox.bind(
+            "<<ListboxSelect>>", self._on_capture_route_selection_changed
+        )
+        # Filter checkbox -- when checked, only hardware outputs are
+        # shown. Unchecked (default) also includes virtual sinks for
+        # OBS-style capture setups.
+        self._capture_route_hardware_only_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            outputs, text="Show hardware outputs only",
+            variable=self._capture_route_hardware_only_var,
+            command=self._populate_capture_route_options,
+        ).pack(anchor=tk.W, pady=(4, 0))
 
         # Populate output list now (doesn't depend on selection)
         self._populate_capture_route_options()

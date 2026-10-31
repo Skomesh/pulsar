@@ -403,6 +403,42 @@ class TestDiscoverAppAudioNodes(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertIsNone(result[0]["sink_name"])
 
+    @mock.patch("pulsar.utils.pw_app_capture._run_pw_dump")
+    def test_every_sink_a_stream_reaches_is_reported(self, mock_run):
+        """An app routed to several outputs reaches several sinks.
+
+        Per-app routing to more than one output is a supported feature,
+        so the discovery must not report only the first sink. It used
+        to: the first link per node won, and the rest were dropped.
+        """
+        mock_run.return_value = [
+            {"type": "PipeWire:Interface:Node", "id": 113,
+             "info": {"props": {"node.name": "App",
+                                "media.class": "Stream/Output/Audio",
+                                "application.name": "App",
+                                "application.process.binary": "app",
+                                "application.process.id": "1"}}},
+            {"type": "PipeWire:Interface:Node", "id": 79,
+             "info": {"props": {"node.name": "sink_a"}}},
+            {"type": "PipeWire:Interface:Node", "id": 80,
+             "info": {"props": {"node.name": "sink_b"}}},
+            # The app reaches BOTH sinks.
+            {"type": "PipeWire:Interface:Link", "id": 241,
+             "info": {"output-node-id": 113, "input-node-id": 79}},
+            {"type": "PipeWire:Interface:Link", "id": 242,
+             "info": {"output-node-id": 113, "input-node-id": 80}},
+        ]
+        result = discover_app_audio_nodes()
+        self.assertEqual(len(result), 1)
+        self.assertEqual(
+            sorted(result[0]["sink_names"]), ["sink_a", "sink_b"],
+            "every sink the stream reaches must be reported",
+        )
+        self.assertIn(
+            result[0]["sink_name"], ("sink_a", "sink_b"),
+            "sink_name must still name one of them",
+        )
+
 
 class TestPwRecord(unittest.TestCase):
     """Tests for the pw-record wrapper functions."""

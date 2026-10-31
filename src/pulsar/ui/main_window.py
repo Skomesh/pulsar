@@ -1962,8 +1962,8 @@ class MainWindow:
                 "Discovery error", f"Failed to enumerate nodes: {e}"
             )
             return
-        # Cache the discovery results so the route button can look
-        # up the sink_name for the currently selected row.
+        # Cache the discovery results. The route handler looks the
+        # selected row's node up here by its position in the tree.
         self._capture_nodes = nodes
         for n in nodes:
             self.capture_tree.insert(
@@ -3598,10 +3598,23 @@ class MainWindow:
                 f"Multi-routing failures: {', '.join(failed)}"
             )
 
-        if created or removed:
+        # The status line must not claim more than was achieved. It used
+        # to say "now routed to N output(s)" where N was the number the
+        # user SELECTED, so a target that failed -- a feedback loop, a
+        # server refusal -- was counted as routed. The failure was logged
+        # in the output pane, but the status bar contradicted it.
+        routed = len(created) + len(
+            [t for t in selected_targets if t in existing_targets]
+        )
+        if failed:
             self.status_var.set(
-                f"'{sink_name}' now routed to "
-                f"{len(selected_targets)} output(s)"
+                f"'{sink_name}' routed to {routed} of "
+                f"{len(selected_targets)} output(s); "
+                f"{len(failed)} failed"
+            )
+        elif created or removed:
+            self.status_var.set(
+                f"'{sink_name}' now routed to {routed} output(s)"
             )
         else:
             self.status_var.set(

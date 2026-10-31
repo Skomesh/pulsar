@@ -17,6 +17,7 @@ from contextlib import ExitStack
 from unittest import mock
 
 from pulsar.ui.main_window import MainWindow
+from pulsar.utils import pw_app_route
 from pulsar.utils.pactl_runner import PactlRunner
 
 # Real output from `pactl list sink-inputs` on PipeWire, trimmed. Note there
@@ -284,6 +285,24 @@ class _PactlPatch:
         )
 
     def __enter__(self):
+        # The handler refuses to route when the PipeWire tools are
+        # missing. CI hides pw-dump, so without this the handler would
+        # take the "not installed" branch and never reach the routing
+        # logic these tests are about.
+        self.stack.enter_context(mock.patch.object(
+            pw_app_route, "pw_link_available", return_value=True
+        ))
+        # Reading the graph (pw-dump) and the live link list (pw-link)
+        # must not shell out here: a CI runner has neither tool
+        # installed, so a real call would raise and the handler would
+        # never reach the routing logic.
+        self.stack.enter_context(mock.patch.object(
+            pw_app_route, "_run_pw_dump", return_value="[]"
+        ))
+        self.stack.enter_context(mock.patch.object(
+            pw_app_route, "_run_pw_link",
+            return_value=mock.Mock(stdout="", stderr="", returncode=0),
+        ))
         return self
 
     def __exit__(self, *exc):

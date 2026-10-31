@@ -15,6 +15,9 @@ Requirements:
 - Python 3.6 or newer
 - Tkinter (usually bundled with Python; on Debian/Ubuntu install `python3-tk`)
 - `pactl` (part of PulseAudio or the PipeWire `pulse-cli-utils` package)
+- `pw-dump` and `pw-link` for app-audio discovery, per-app routing and
+  the Diagnostics tab (Debian/Ubuntu `pipewire-bin`, Fedora
+  `pipewire-utils`, Arch `pipewire`)
 
 Verify your environment:
 
@@ -91,9 +94,22 @@ CI:
 ```
 
 It deliberately leaves `gdbus` visible, because `ubuntu-latest` ships it
-(via `libglib2.0-bin`) and the portal tests need it present. Hiding it invents
-failures CI does not have. A matching run reports `114 passed, 53 skipped` and
-no failures.
+(via `libglib2.0-bin`) and the portal tests need it present. Hiding it
+invents failures CI does not have. A matching run reports
+`298 passed, 164 skipped` and no failures.
+
+Hiding a tool from `shutil.which()` is **not** the same as removing it.
+The audio tools were hidden from `which()` but still on `PATH`, so a
+subprocess call to them still succeeded and returned real output. A dev
+machine with pipewire installed then took a different path through the
+code than a CI runner, which has neither tool: seven routing tests
+passed locally and would have failed on CI. The script now makes the
+hidden tools *fail* as well — exit 127, like a binary that is not
+installed. If you add a tool to that list, make it fail too.
+
+The corollary for test authors: **a test must not shell out to a tool
+CI does not have.** Patch the seam (`_run_pw_dump`, `_run_pw_link`)
+rather than relying on the host having the binary.
 
 Extra arguments are forwarded to pytest, and a test target replaces the
 default `tests/`:
@@ -109,13 +125,22 @@ so in your PR description if the two disagree.
 
 ## Code style
 
+The coding policy lives in **[AGENTS.md](AGENTS.md)** — validation at the
+boundary, error handling, extraction, and the traps specific to driving
+a PulseAudio/PipeWire server. Read it before writing code here.
+
+The short version:
+
 - Follow [PEP 8](https://peps.python.org/pep-0008/).
 - Use type hints where reasonable, especially on public functions and
-  module boundaries. Internal helpers can be lighter.
+  module boundaries. Internal helpers can be lighter. A type hint is
+  not runtime validation, though — see AGENTS.md.
 - Prefer f-strings, `pathlib.Path`, and `subprocess.run()` with explicit
   `check=` / `capture_output=`.
 - Keep modules small and focused. Avoid circular imports between
-  `src/ui`, `src/utils`, and `src/config`.
+  `src/pulsar/ui`, `src/pulsar/utils`, and `src/pulsar/config`.
+- `utils/` must not import Tkinter. That is what makes it testable with
+  no display and no audio server.
 - No third-party runtime dependencies unless absolutely necessary;
   the goal is a lightweight tool that runs on a stock Python install.
 

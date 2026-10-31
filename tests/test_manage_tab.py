@@ -31,6 +31,7 @@ import unittest
 from unittest import mock
 
 from pulsar.ui.main_window import MainWindow
+from pulsar.utils.pactl_runner import PactlRunner
 
 # ----------------------------------------------------------------------
 # 1. Does multi-output routing subsume the single-output panel?
@@ -158,6 +159,41 @@ class TestMultiRoutingSubsumesSingleOutput(unittest.TestCase):
         win.apply_multi_routing()
 
         self.assertEqual(sorted(created), ["alsa_output.a", "alsa_output.b"])
+
+    def test_the_status_line_does_not_claim_a_failed_target_was_routed(self):
+        """A target that could not be routed must not be counted as routed.
+
+        The status bar is the prominent, always-visible line. It said
+        "now routed to N output(s)" where N was the number the user
+        SELECTED, so a target that failed -- a feedback loop, a server
+        refusal -- was reported as part of the route. The failure was
+        logged in the output pane, but the status bar contradicted it.
+        """
+        win, created, unloaded = self._window(
+            ["alsa_output.a", "alsa_output.b"], []
+        )
+        # One target fails to be created. The helper's own patch is
+        # already in place, so this replaces it outright rather than
+        # delegating to it.
+        def create(source, target, latency_msec=None, logger=None):
+            if target == "alsa_output.b":
+                return None          # confirmed failure
+            return "mod-created"
+
+        with mock.patch.object(
+            PactlRunner, "create_loopback", side_effect=create
+        ):
+            win.apply_multi_routing()
+
+        status = win.status_var.set.call_args[0][0]
+        self.assertIn(
+            "1 of 2 output", status,
+            "the status line must count only what was routed: " + status,
+        )
+        self.assertIn(
+            "fail", status.lower(),
+            "the status line must say a target failed: " + status,
+        )
 
 
 # ----------------------------------------------------------------------

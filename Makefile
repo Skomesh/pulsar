@@ -23,13 +23,13 @@ install:  ## Run the project install script
 test:  ## Run the test suite
 	python3 -m pytest tests/
 
-lint:  ## Lint source code (uses ruff if available, otherwise py_compile)
+lint:  ## Lint source, tests and scripts (uses ruff if available, otherwise py_compile)
 	@if command -v ruff >/dev/null 2>&1; then \
 		echo "Running ruff..."; \
-		ruff check src/; \
+		ruff check src/ tests/ scripts/; \
 	else \
 		echo "ruff not installed; falling back to py_compile syntax check"; \
-		python3 -m py_compile src/pulsar/__main__.py; \
+		python3 -m compileall -q src/ tests/ scripts/; \
 	fi
 
 format:  ## Auto-format source code with ruff

@@ -211,6 +211,9 @@ def discover_app_audio_nodes(logger=None) -> List[Dict[str, Any]]:
         Stream/Input/Audio (capture), None. Computed via pw-dump Links
         rather than `pactl list sink-inputs` because PA doesn't always
         enumerate all PW stream nodes.
+      - sink_names: EVERY sink the stream reaches. A stream can reach
+        more than one, because routing an app to several outputs at
+        once is a supported feature. `sink_name` is the first of them.
 
     Returns an empty list when pw-dump runs and finds nothing. Raises
     PwDumpUnavailable when pw-dump cannot be run at all -- an empty
@@ -224,9 +227,6 @@ def discover_app_audio_nodes(logger=None) -> List[Dict[str, Any]]:
     # Build lookup tables:
     # - nodes_by_id: PW node id -> node name (for sink lookup)
     nodes_by_id: Dict[int, str] = {}
-    # - sink_for_input_node: for each PW node id that's a Stream/Input/Audio
-    #   (an app playing audio), the sink name it's connected to (via Links)
-    sink_for_input_node: Dict[int, str] = {}
 
     for d in data:
         if d.get("type") != "PipeWire:Interface:Node":
@@ -246,8 +246,12 @@ def discover_app_audio_nodes(logger=None) -> List[Dict[str, Any]]:
     # comes out) and the sink is the INPUT side (audio goes in).
     #
     # So for each link: output_node = source of audio, input_node = sink.
-    # We map source_node_id -> sink_name for Stream/Output/Audio nodes.
-    sink_for_input_node: Dict[int, str] = {}
+    # We map source_node_id -> sink names for Stream/Output/Audio nodes.
+    # A stream can reach MORE THAN ONE sink: routing an app to several
+    # outputs at once is a supported feature, and each of those links
+    # shows up here. Only the first was kept, so the discovery reported
+    # a partial view of where the app's audio was going.
+    sinks_for_input_node: Dict[int, List[str]] = {}
     for d in data:
         if d.get("type") != "PipeWire:Interface:Link":
             continue
@@ -263,9 +267,10 @@ def discover_app_audio_nodes(logger=None) -> List[Dict[str, Any]]:
         # The link's output side is the audio SOURCE (e.g. an app's
         # Stream/Output/Audio node). The input side is the SINK
         # (where the audio is going). For our lookup, we want to
-        # find the sink for each stream node: out_id (source) -> in_name (sink).
-        if sink_for_input_node.get(out_id) is None:
-            sink_for_input_node[out_id] = in_name
+        # find the sinks for each stream node: out_id (source) -> sinks.
+        sinks = sinks_for_input_node.setdefault(out_id, [])
+        if in_name not in sinks:
+            sinks.append(in_name)
 
     out: List[Dict[str, Any]] = []
     for d in data:
@@ -294,7 +299,7 @@ def discover_app_audio_nodes(logger=None) -> List[Dict[str, Any]]:
                 props.get("application.process.id") else None
         except ValueError:
             pid = None
-        sink_name = sink_for_input_node.get(node_id)
+        sink_names = sinks_for_input_node.get(node_id, [])
         out.append({
             "id": node_id,
             "node_name": node_name,
@@ -303,7 +308,10 @@ def discover_app_audio_nodes(logger=None) -> List[Dict[str, Any]]:
             "binary": binary,
             "pid": pid,
             "description": f"{app_name} ({pid or '?'}) - {mc}",
-            "sink_name": sink_name,
+            # The first sink it reaches. A stream can reach several --
+            # `sink_names` has them all.
+            "sink_name": sink_names[0] if sink_names else None,
+            "sink_names": sink_names,
         })
 
     # Stable, useful ordering: input streams (capture) first, then output

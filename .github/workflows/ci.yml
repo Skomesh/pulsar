@@ -72,9 +72,13 @@ jobs:
         # continue-on-error is intentionally false: lint failures SHOULD fail CI.
         # But if ruff somehow didn't install (e.g. network blip), degrade to a
         # warning rather than a hard failure.
+        #
+        # tests/ and scripts/ are linted too, not just src/. The test files
+        # are a large part of the codebase, and a lint error in one of
+        # them is a real defect that would otherwise reach main unchecked.
         run: |
           if command -v ruff >/dev/null 2>&1; then
-            ruff check src/
+            ruff check src/ tests/ scripts/
           else
             echo "::warning::ruff not available on PATH; skipping lint step"
           fi

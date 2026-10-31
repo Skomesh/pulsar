@@ -18,6 +18,7 @@ import unittest
 from unittest import mock
 
 from pulsar.ui.main_window import MainWindow
+from pulsar.utils import pw_app_route
 from pulsar.utils.pactl_runner import PactlRunner
 
 
@@ -117,6 +118,26 @@ class _Server:
     def __enter__(self):
         from contextlib import ExitStack
         self.stack = ExitStack()
+        # The handler refuses to route when the PipeWire tools are
+        # missing. CI hides pw-dump, so without this the handler would
+        # take the "not installed" branch and never reach the routing
+        # logic these tests are about. The refusal itself is covered by
+        # its own test.
+        self.stack.enter_context(mock.patch.object(
+            pw_app_route, "pw_link_available", return_value=True
+        ))
+        # The handler also READS the graph (pw-dump) and the live link
+        # list (pw-link). Those must not shell out here: a CI runner
+        # has neither tool installed, so a real call would raise and
+        # the handler would never reach the routing logic. Stub them
+        # with the smallest thing that parses.
+        self.stack.enter_context(mock.patch.object(
+            pw_app_route, "_run_pw_dump", return_value="[]"
+        ))
+        self.stack.enter_context(mock.patch.object(
+            pw_app_route, "_run_pw_link",
+            return_value=mock.Mock(stdout="", stderr="", returncode=0),
+        ))
         self.move = self.stack.enter_context(mock.patch.object(
             PactlRunner, "move_sink_input", return_value=self.move_ok
         ))
@@ -199,6 +220,33 @@ class TestRouteAppToOutputs(unittest.TestCase):
         win = make_window(node=make_node(node_id=63))
         _, plan, _ = self._route(win, ["speakers"])
         self.assertEqual(plan.call_args.kwargs["stream_node_id"], 63)
+
+    def test_the_tools_must_be_installed(self):
+        """Without the PipeWire link tools, refuse -- and say why.
+
+        The refusal has to be loud. Silently doing nothing would leave
+        the user believing the app was routed while their audio went
+        somewhere else.
+        """
+        win = make_window()
+        win.capture_route_listbox._items = ["speakers"]
+        win.capture_route_listbox._selected = (0,)
+        with mock.patch.object(
+            PactlRunner, "list_sinks",
+            return_value=[{"name": "speakers"}, {"name": "headphones"}],
+        ), mock.patch.object(
+            pw_app_route, "pw_link_available", return_value=False
+        ):
+            with mock.patch(
+                "pulsar.ui.main_window.pw_app_route.apply_plan"
+            ) as apply:
+                with mock.patch(
+                    "pulsar.ui.main_window.messagebox"
+                ) as mb:
+                    win._on_capture_route_to_outputs_clicked()
+        apply.assert_not_called()
+        mb.showerror.assert_called_once()
+        self.assertIn("PipeWire", mb.showerror.call_args[0][1])
 
     def test_the_target_must_still_exist(self):
         """The list can be stale -- a device unplugged since the refresh.

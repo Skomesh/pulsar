@@ -15,6 +15,7 @@ behaviour. They run against recorded pw-dump / pw-link output, so they
 do not need a live server.
 """
 
+import subprocess
 import unittest
 from unittest import mock
 
@@ -141,6 +142,45 @@ PW_LINK_OUTPUT = """  94 vsink_a:playback_FL
   85 paplay:output_FR
 103   |->   72 vsink_a:playback_FR
 """
+
+
+class TestRunPwDumpFailsLoudly(unittest.TestCase):
+    """A failing `pw-dump` must not look like an empty graph.
+
+    The return code was never checked. A `pw-dump` that failed --
+    no daemon, a permission problem, a version mismatch -- returned its
+    empty stdout, which parsed to no ports, which planned no links.
+    The handler then reported the app as routed to the chosen output.
+    A tool that could not answer was indistinguishable from a graph
+    with nothing in it.
+    """
+
+    def test_a_failing_pw_dump_raises(self):
+        failed = subprocess.CompletedProcess(
+            args=["pw-dump"], returncode=1, stdout="", stderr="boom",
+        )
+        with mock.patch.object(
+            pw_app_route.subprocess, "run", return_value=failed
+        ):
+            with self.assertRaises(pw_app_route.PwLinkUnavailable):
+                pw_app_route._run_pw_dump()
+
+    def test_a_missing_pw_dump_raises(self):
+        with mock.patch.object(
+            pw_app_route.subprocess, "run",
+            side_effect=FileNotFoundError("pw-dump"),
+        ):
+            with self.assertRaises(pw_app_route.PwLinkUnavailable):
+                pw_app_route._run_pw_dump()
+
+    def test_a_successful_pw_dump_returns_its_output(self):
+        ok = subprocess.CompletedProcess(
+            args=["pw-dump"], returncode=0, stdout="[]", stderr="",
+        )
+        with mock.patch.object(
+            pw_app_route.subprocess, "run", return_value=ok
+        ):
+            self.assertEqual(pw_app_route._run_pw_dump(), "[]")
 
 
 class TestParsePorts(unittest.TestCase):

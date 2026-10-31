@@ -98,18 +98,30 @@ class RoutePlan:
 
 
 def _run_pw_dump(logger=None) -> str:
-    """Run pw-dump and return its stdout."""
+    """Run pw-dump and return its stdout.
+
+    Raises PwLinkUnavailable if the command could not run or failed.
+    The return code has to be checked: a `pw-dump` that failed -- no
+    daemon, a permission problem -- returns empty stdout, which parses
+    to no ports, which plans no links. Returning that as if it were a
+    real (empty) graph made a broken tool indistinguishable from a
+    system with nothing in it, and the caller reported success.
+    """
     try:
-        out = subprocess.run(
+        result = subprocess.run(
             ["pw-dump"],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=5,
             text=True,
-        ).stdout
+        )
     except (OSError, subprocess.SubprocessError) as e:
         raise PwLinkUnavailable(f"pw-dump failed: {e}") from e
-    return out
+    if result.returncode != 0:
+        raise PwLinkUnavailable(
+            f"pw-dump exited with status {result.returncode}"
+        )
+    return result.stdout
 
 
 def _run_pw_link(args: Sequence[str], logger=None) -> subprocess.CompletedProcess:

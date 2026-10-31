@@ -191,11 +191,6 @@ class MainWindow:
         # the binding).
         _bind_wheel_to_children(inner)
 
-        def _on_inner_configure(_event):
-            canvas.configure(scrollregion=canvas.bbox("all"))
-            # Re-bind to catch any new children
-            _bind_wheel_to_children(inner)
-
         return inner
 
     def setup_create_tab(self):
@@ -1291,8 +1286,7 @@ class MainWindow:
         profile = self.profile_manager.get_profile(name)
         if not profile:
             return
-        import json as _json
-        body = _json.dumps(profile, indent=2)
+        body = json.dumps(profile, indent=2)
         self._set_profile_details_text(body)
 
     def _set_profile_details_text(self, text: str):
@@ -2790,7 +2784,6 @@ class MainWindow:
             if 'null-sink' in module_name:
                 # Extract the sink_name from module arguments
                 # Handle various formats and special characters
-                import re
                 sink_match = re.search(r'sink_name=([a-zA-Z0-9_.-]+)', module_args)
                 if sink_match:
                     device_name = sink_match.group(1)
@@ -3200,7 +3193,10 @@ class MainWindow:
         item = self.unified_tree.item(selected[0])
         values = item['values']
 
-        if not values or len(values) < 2:
+        # Three names are unpacked just below, so a two-element tuple
+        # passes a "< 2" guard and then raises ValueError inside the
+        # selection callback.
+        if not values or len(values) < 3:
             self.update_details_display("Select an item to see details")
             self.unload_button.config(state="disabled")
             self._routing_sink_name = None
@@ -3610,7 +3606,7 @@ class MainWindow:
             lb for lb in PactlRunner.list_loopbacks()
             if lb.get("source") == monitor
         ]
-        existing_targets: dict[str, Any] = {}
+        existing_targets: Dict[str, Any] = {}
         for lb in existing_loopbacks:
             sink = lb.get("sink")
             if sink:
@@ -3876,7 +3872,6 @@ class MainWindow:
 
                 # Parse key module parameters
                 if 'channels=' in args:
-                    import re
                     channels_match = re.search(r'channels=(\d+)', args)
                     if channels_match:
                         channels = int(channels_match.group(1))
@@ -3885,7 +3880,6 @@ class MainWindow:
                         info += f"Created as: {channel_desc}\n"
 
                 if 'rate=' in args:
-                    import re
                     rate_match = re.search(r'rate=(\d+)', args)
                     if rate_match:
                         rate = rate_match.group(1)
@@ -3939,13 +3933,11 @@ class MainWindow:
             # Parse key info from arguments
             args = module_data.get('argument', '')
             if 'sink_name=' in args:
-                import re
                 sink_match = re.search(r'sink_name=([a-zA-Z0-9_.-]+)', args)
                 if sink_match:
                     info += f"Device Name: {sink_match.group(1)}\n"
 
             if 'channels=' in args:
-                import re
                 channels_match = re.search(r'channels=(\d+)', args)
                 if channels_match:
                     channels = int(channels_match.group(1))
@@ -4452,7 +4444,6 @@ class MainWindow:
         """
         # For null sinks, get the sink name
         if 'null-sink' in module_name:
-            import re
             sink_match = re.search(r'sink_name=([a-zA-Z0-9_.-]+)', module_args)
             if sink_match:
                 sink_name = sink_match.group(1)
@@ -4461,7 +4452,6 @@ class MainWindow:
 
         # For hardware devices
         if 'alsa-card' in module_name:
-            import re
             card_match = re.search(r'card_name=([^=\s]+)', module_args)
             if card_match:
                 card_name = card_match.group(1).strip('"\'')
@@ -4477,7 +4467,6 @@ class MainWindow:
 
         # For bluez devices
         if 'bluez' in module_name:
-            import re
             device_match = re.search(r'device=([^=\s]+)', module_args)
             if device_match:
                 device_name = device_match.group(1).strip('"\'')
@@ -5098,7 +5087,6 @@ class MainWindow:
 
         # Get card name from module arguments if available
         if 'card=' in module_args:
-            import re
             card_match = re.search(r'card=([^=\s]+)', module_args)
             if card_match:
                 card_name = card_match.group(1).strip('"\'')

@@ -31,9 +31,31 @@ if [ ! -d "$APP_DIR" ] && [ ! -f "$BIN_DIR/pulsar" ] && [ ! -f "$DESKTOP_DIR/pul
 fi
 
 # Remove application directory
+#
+# NOT the whole of it. $APP_DIR is $HOME/.local/share/pulsar, which is
+# also the app's XDG data directory: paths.py puts the user's saved
+# profiles and presets in $XDG_DATA_HOME/pulsar/presets, inside it.
+# `rm -rf "$APP_DIR"` therefore deleted the user's profiles and
+# presets -- the one thing uninstalling an application must not do.
+#
+# So the installed files are removed and the data is kept.
 if [ -d "$APP_DIR" ]; then
     echo -e "${YELLOW}Removing application files from $APP_DIR...${NC}"
+    # Keep the user's saved presets and profiles.
+    PRESETS_DIR="$APP_DIR/presets"
+    KEPT_PRESETS=""
+    if [ -d "$PRESETS_DIR" ]; then
+        KEPT_PRESETS="$(mktemp -d)"
+        cp -a "$PRESETS_DIR/." "$KEPT_PRESETS/"
+        rm -rf "$PRESETS_DIR"
+    fi
     rm -rf "$APP_DIR"
+    if [ -n "$KEPT_PRESETS" ]; then
+        mkdir -p "$APP_DIR"
+        cp -a "$KEPT_PRESETS/." "$APP_DIR/presets/"
+        rm -rf "$KEPT_PRESETS"
+        echo -e "${GREEN}✓ Your saved profiles and presets were kept${NC}"
+    fi
     echo -e "${GREEN}✓ Application files removed${NC}"
 else
     echo -e "${YELLOW}Application directory not found, skipping...${NC}"

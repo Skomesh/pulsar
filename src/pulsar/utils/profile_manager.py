@@ -463,17 +463,28 @@ class ProfileManager:
     def _serialize_sink_properties(props: Optional[Dict[str, str]]) -> Optional[str]:
         """Convert a JSON dict back into pactl's sink_properties=... string.
 
-        Uses single quotes inside, double quotes outside — verified as the
-        only quoting style that doesn't break pactl's parser. See
-        docs/PHASE3_INTROSPECTION_REPORT.md Q6b.
+        NO quoting. PulseAudio's sink_properties parser splits on
+        whitespace, with no quoting and no escaping -- measured on a
+        live server, and documented in pactl_runner.py next to the
+        code that already works around it.
+
+        So `device.description='My Big Rig' pulsar.managed=true` was
+        parsed as the property `device.description` with the value
+        `'My`, plus two garbage properties (`Big` and `Rig'`), and the
+        NEXT real property was corrupted along with them. The profile
+        apply reported success while the device was mislabelled and
+        its properties were broken.
+
+        A value containing a space cannot be represented at all, so the
+        space becomes an underscore -- exactly as `_create_null_sink`
+        already does it.
         """
         if not props:
             return None
         parts = []
         for k, v in props.items():
-            # Escape any single quotes in the value
-            v_escaped = str(v).replace("'", "'\\''")
-            parts.append(f"{k}='{v_escaped}'")
+            safe = "_".join(str(v).split())
+            parts.append(f"{k}={safe}")
         return " ".join(parts)
 
     def apply_profile(
@@ -571,9 +582,31 @@ class ProfileManager:
         if unload_existing:
             if logger:
                 logger("Unloading existing null-sinks and loopbacks...")
+            # Unload only the loopbacks OURS: the ones built from the
+            # monitor of a null-sink Pulsar created. `module-loopback`
+            # carries no ownership marker of its own, so the previous
+            # behaviour -- unload every loopback on the machine --
+            # destroyed the user's OBS loopback, their Steam Streaming
+            # loopback, or any hand-made one, and the apply still
+            # reported success. The null-sink unload next to it was
+            # already scoped to the managed ones.
+            managed = set(PactlRunner.managed_null_sink_names(logger))
+            kept_loopbacks = []
             for lb in PactlRunner.list_loopbacks(logger):
-                PactlRunner.unload_loopback(lb["id"], logger)
+                source = lb.get("source", "")
+                owner = source[:-len(".monitor")] if source.endswith(".monitor") else ""
+                if owner and owner in managed:
+                    PactlRunner.unload_loopback(lb["id"], logger)
+                else:
+                    kept_loopbacks.append(source or lb.get("id", "?"))
+            if kept_loopbacks and logger:
+                logger(
+                    "  Kept loopbacks Pulsar did not create: "
+                    + ", ".join(kept_loopbacks)
+                )
             unloaded, errors_unload = PactlRunner.unload_all_null_sinks(logger)
+            if errors_unload:
+                result["errors"].extend(errors_unload)
             if logger:
                 logger(f"  Unloaded {unloaded} null-sinks")
 

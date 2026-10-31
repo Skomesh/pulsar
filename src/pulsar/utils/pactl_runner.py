@@ -730,6 +730,28 @@ class PactlRunner:
         return return_code == 0
 
     @staticmethod
+    def managed_null_sink_names(logger=None) -> List[str]:
+        """The names of the null-sinks this program created.
+
+        A `module-null-sink` carries `pulsar.managed=true` in its
+        argument when Pulsar made it. That marker is what makes it
+        ours, and it is how a loopback can be recognised as ours too:
+        we build a loopback from a managed sink's monitor.
+        """
+        names = []
+        for m in PactlRunner.list_modules(logger):
+            if m.get('name') != 'module-null-sink':
+                continue
+            argument = m.get('argument', '')
+            if PactlRunner.MANAGED_PROPERTY not in argument:
+                continue
+            for token in argument.split():
+                if token.startswith('sink_name='):
+                    names.append(token[len('sink_name='):])
+                    break
+        return names
+
+    @staticmethod
     def unload_all_null_sinks(logger=None, only_managed: bool = True) -> Tuple[int, List[str]]:
         """
         Unload null sink modules created by this program.

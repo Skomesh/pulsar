@@ -58,7 +58,11 @@ def parse_xwd(blob):
                 row += bytes((r, g, b))
         elif bits_per_pixel == 24:
             for x in range(pixmap_width):
-                off = x * 4
+                # 24-bit pixels are THREE bytes each. The stride was 4,
+                # which is the 32-bit branch's, so every pixel after the
+                # first was read from the wrong offset and the last one
+                # fell off the end of the row.
+                off = x * 3
                 if off + 3 > len(line):
                     break
                 b, g, r = line[off:off + 3]

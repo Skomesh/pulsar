@@ -8,6 +8,8 @@ __pycache__/
 *.so
 .Python
 build/
+# build_rpm.sh's default _topdir; a local RPM build leaves it here.
+rpmbuild/
 dist/
 *.egg-info/
 .eggs/

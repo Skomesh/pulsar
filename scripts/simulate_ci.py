@@ -24,7 +24,12 @@ import textwrap
 import zipfile
 from pathlib import Path
 
-WORKFLOW = Path(".github/workflows/ci.yml")
+# Anchored to this file, not to the current directory. The script's own
+# docstring says to run it from the repo root; anchoring it means it
+# works from anywhere instead of quietly checking a path that is not
+# there.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
 
 #: Top-level module names the app used before it moved into a `pulsar`
 #: package. A bare import of any of these anywhere is a leftover.
@@ -143,7 +148,7 @@ def check_install(wheel):
         print("  none -- every import is namespaced under pulsar")
 
     step("6. no bundled preset JSON remains")
-    leftover = sorted(Path("src/pulsar/utils/presets").glob("*.json"))
+    leftover = sorted((REPO_ROOT / "src/pulsar/utils/presets").glob("*.json"))
     if leftover:
         fail("preset json",
              f"Pulsar ships no default profiles, but these are still "

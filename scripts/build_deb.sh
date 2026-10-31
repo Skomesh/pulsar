@@ -99,9 +99,14 @@ mkdir -p "$DIST_DIR"
 for deb in "${BUILT[@]}"; do
     base=$(basename -- "$deb")
     if [ -n "$EXPECT_VERSION" ]; then
+        # dpkg names the package <name>_<upstream>-<revision>_<arch>.deb,
+        # so for upstream 0.1.0 the file is pulsar_0.1.0-1_all.deb. The
+        # old glob looked for pulsar_0.1.0_*.deb, which that can never
+        # be, so the release build died with "expected ... got ...".
+        # The upstream version is the PREFIX of the deb's version.
         case "$base" in
-            "pulsar_${EXPECT_VERSION}_"*.deb) ;;
-            *) die "expected pulsar_${EXPECT_VERSION}_*.deb, got $base" ;;
+            "pulsar_${EXPECT_VERSION}"*.deb) ;;
+            *) die "expected pulsar_${EXPECT_VERSION}*.deb, got $base" ;;
         esac
     fi
     # Copy, then remove the parent copy. The copy is the operation that can

@@ -270,12 +270,18 @@ def cmd_list_cards(args) -> int:
     if not _require_audio_server():
         return EXIT_ERROR
     cards = PactlRunner.list_cards()
-    rows = [
-        [c.get("name", "?"), c.get("description", ""),
-         str(c.get("sinks", 0)), str(c.get("sources", 0)),
-         str(len(c.get("available") or []))]
-        for c in cards
-    ]
+    # A card dict has name/driver/active_profile/description/profiles.
+    # It has no "sinks", "sources" or "available" key -- the counts live
+    # inside each profile -- so the old columns always rendered 0 and 0.
+    rows = []
+    for c in cards:
+        profiles = c.get("profiles") or []
+        sink_count = sum(int(p.get("sinks") or 0) for p in profiles)
+        source_count = sum(int(p.get("sources") or 0) for p in profiles)
+        rows.append([
+            c.get("name", "?"), c.get("description", ""),
+            str(sink_count), str(source_count), str(len(profiles)),
+        ])
     text = table(rows, ["NAME", "DESCRIPTION", "SINKS", "SOURCES", "PROFILES"])
     emit(
         {"count": len(cards), "cards": cards},
@@ -426,19 +432,30 @@ def cmd_volume(args) -> int:
 
 
 def cmd_default(args) -> int:
-    sink = resolve_or_report(args.name, "sink", args)
-    if not sink:
+    # Resolve against the list the name belongs to. `resolve_or_report`
+    # always looked at the SINKS, so `pulsar default source <name>`
+    # could never succeed: it reported "no sink matching ..." for a
+    # source that existed, and `set_default_source` was never called.
+    if args.kind == "source":
+        candidates = PactlRunner.list_sources()
+    else:
+        candidates = PactlRunner.list_sinks()
+
+    target = resolve_or_report(
+        args.name, args.kind, args, candidates=candidates
+    )
+    if not target:
         return EXIT_ERROR
 
     setter = (PactlRunner.set_default_sink if args.kind == "sink"
               else PactlRunner.set_default_source)
-    if not setter(sink):
-        print(f"Error: could not make '{sink}' the default {args.kind}.",
+    if not setter(target):
+        print(f"Error: could not make '{target}' the default {args.kind}.",
               file=sys.stderr)
         return EXIT_ERROR
 
-    emit({"default": sink, "kind": args.kind},
-         f"Default {args.kind} is now {sink}", args.json)
+    emit({"default": target, "kind": args.kind},
+         f"Default {args.kind} is now {target}", args.json)
     return EXIT_OK
 
 
@@ -617,25 +634,31 @@ def _setup_preset(p: argparse.ArgumentParser) -> None:
     p.add_argument("name")
 
 
-def resolve_or_report(name: str, role: str, args) -> Optional[str]:
-    """Resolve a user-supplied sink name, or print why it failed.
+def resolve_or_report(name: str, role: str, args,
+                     candidates: Optional[List[Dict[str, Any]]] = None
+                     ) -> Optional[str]:
+    """Resolve a user-supplied device name, or print why it failed.
 
     Prints the ambiguous list when that is the problem, because "no such
     sink" for a name that matches three real ones is useless advice.
+
+    `candidates` is the list the name belongs to -- sinks or sources.
+    It defaults to the sinks, which is what every other caller wants.
     """
-    sinks = PactlRunner.list_sinks()
-    resolved = resolve_sink(name, sinks=sinks)
+    if candidates is None:
+        candidates = PactlRunner.list_sinks()
+    resolved = resolve_sink(name, sinks=candidates)
 
     if resolved:
         return resolved
 
     lowered = name.lower()
-    matches = [s for s in sinks if lowered in s.get("name", "").lower()]
+    matches = [s for s in candidates if lowered in s.get("name", "").lower()]
     if matches:
         print(format_ambiguous(name, matches), file=sys.stderr)
     else:
-        print(f"Error: no sink matching '{name}' (the {role}).", file=sys.stderr)
-        print("Run `pulsar list sinks` to see what is available.",
+        print(f"Error: no {role} matching '{name}'.", file=sys.stderr)
+        print(f"Run `pulsar list {role}s` to see what is available.",
               file=sys.stderr)
     return None
 

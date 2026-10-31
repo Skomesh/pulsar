@@ -80,7 +80,9 @@ echo -e "${YELLOW}Copying application files to $APP_DIR...${NC}"
 cp -r ./* "$APP_DIR/"
 
 # Remove installation scripts from the installed location (they're not needed there)
-rm -f "$APP_DIR/install.sh" "$APP_DIR/uninstall.sh" "$APP_DIR/commit-to-install.sh"
+# uninstall.sh stays: the install message at the end tells the user to
+# run $APP_DIR/uninstall.sh, and that file was being deleted here.
+rm -f "$APP_DIR/install.sh" "$APP_DIR/commit-to-install.sh"
 
 # Make the launcher script executable
 chmod +x "$APP_DIR/pulsar"
@@ -88,6 +90,10 @@ chmod +x "$APP_DIR/pulsar"
 # Create symlink in bin directory
 echo -e "${YELLOW}Creating symbolic link in $BIN_DIR...${NC}"
 ln -sf "$APP_DIR/pulsar" "$BIN_DIR/pulsar"
+# The desktop entry below execs pulsar-gui, so that name has to exist.
+# Only the `pulsar` symlink was created, so the launcher in the
+# application menu pointed at a path that was never there.
+ln -sf "$APP_DIR/pulsar" "$BIN_DIR/pulsar-gui"
 
 # Install desktop file with correct paths
 echo -e "${YELLOW}Installing desktop file to $DESKTOP_DIR...${NC}"
@@ -99,7 +105,7 @@ Name=Pulsar
 GenericName=Audio Control
 Comment=Graphical audio routing manager
 Exec=$BIN_DIR/pulsar-gui
-Icon=audio-card
+Icon=pulsar
 Terminal=false
 Categories=AudioVideo;Audio;Settings;
 Keywords=sound;audio;volume;pulseaudio;pulse;mixer;

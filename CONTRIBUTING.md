@@ -12,7 +12,7 @@ and tests.
 
 Requirements:
 
-- Python 3.6 or newer
+- Python 3.8 or newer
 - Tkinter (usually bundled with Python; on Debian/Ubuntu install `python3-tk`)
 - `pactl` (part of PulseAudio or the PipeWire `pulse-cli-utils` package)
 - `pw-dump` and `pw-link` for app-audio discovery, per-app routing and

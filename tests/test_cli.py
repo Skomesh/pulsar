@@ -518,13 +518,30 @@ class TestListSources(CliTestBase):
 
 
 class TestListCards(CliTestBase):
-    # Real key set from _parse_card_profile_line.
+    # The REAL key set from PactlRunner.list_cards. A card has
+    # name/driver/active_profile/description/profiles, and the sink and
+    # source counts live inside each PROFILE. The old fixture put them
+    # at the top level, which list_cards never produces -- so the CLI
+    # read keys that were never there and every card rendered 0 and 0.
     CARDS = [
         {
-            "name": "alsa_card.pci", "description": "Built-in Audio",
-            "sinks": 1, "sources": 1, "priority": 3,
-            "available": [
-                {"name": "output:analog-stereo", "description": "Analog Stereo Output"},
+            "name": "alsa_card.pci",
+            "driver": "alsa",
+            "active_profile": "output:analog-stereo",
+            "description": "Built-in Audio",
+            "profiles": [
+                {
+                    "name": "output:analog-stereo",
+                    "description": "Analog Stereo Output",
+                    "sinks": 1, "sources": 1, "priority": 3,
+                    "available": True,
+                },
+                {
+                    "name": "output:stereo",
+                    "description": "Stereo Output",
+                    "sinks": 1, "sources": 0, "priority": 2,
+                    "available": False,
+                },
             ],
         },
     ]
@@ -536,13 +553,23 @@ class TestListCards(CliTestBase):
         self.assertEqual(payload["count"], 1)
         self.assertEqual(payload["cards"][0]["name"], "alsa_card.pci")
 
-    def test_table_shows_available_profile_count(self):
+    def test_the_columns_come_from_the_profiles(self):
+        """The counts live inside the profiles, not at the top level.
+
+        Reading `c["sinks"]` and `c["available"]` -- keys a card does
+        not have -- made every card render 0 sinks, 0 sources and 0
+        profiles, whatever the real profile data said.
+        """
         with self.patch_runner(list_cards=mock.Mock(return_value=self.CARDS)):
             code, out, _ = self.run_cli("list", "cards")
 
         self.assertEqual(code, 0)
         self.assertIn("alsa_card.pci", out)
-        self.assertIn("1", out)
+        # 1 sink + 1 sink across the two profiles; 1 source; 2 profiles.
+        self.assertIn("2", out)
+        row = [line for line in out.splitlines() if "alsa_card.pci" in line][0]
+        columns = row.split()
+        self.assertEqual(columns[-3:], ["2", "1", "2"])
 
     def test_no_cards_is_not_an_error(self):
         with self.patch_runner(list_cards=mock.Mock(return_value=[])):

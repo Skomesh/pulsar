@@ -96,7 +96,7 @@ CI:
 It deliberately leaves `gdbus` visible, because `ubuntu-latest` ships it
 (via `libglib2.0-bin`) and the portal tests need it present. Hiding it
 invents failures CI does not have. A matching run reports
-`298 passed, 164 skipped` and no failures.
+`323 passed, 154 skipped` and no failures.
 
 Hiding a tool from `shutil.which()` is **not** the same as removing it.
 The audio tools were hidden from `which()` but still on `PATH`, so a

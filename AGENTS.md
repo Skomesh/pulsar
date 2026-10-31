@@ -160,7 +160,30 @@ that will bite anyone who forgets them.
   test that can reach one.
 - The **command of record is `./tests/run_ci_equivalent.sh -q`**, not
   `make test`. It hides the audio tools so the run matches CI. A
-  matching run reports `298 passed, 164 skipped`.
+  matching run reports `323 passed, 154 skipped`.
+- **Hiding a tool from `shutil.which()` is not the same as removing
+  it.** The tools were hidden from `which()` but still on `PATH`, so a
+  subprocess call to them still succeeded and returned real output. A
+  dev machine with pipewire installed then took a different path
+  through the code than a CI runner, which has neither tool: seven
+  routing tests passed locally and would have failed on CI. The
+  script now makes the hidden tools *fail* as well. If you add a tool
+  to that list, make it fail too.
+- **A test must not shell out to a tool CI does not have.** Patch the
+  seam (`_run_pw_dump`, `_run_pw_link`) rather than relying on the
+  host having the binary.
+- **A test must not shell out to a daemon CI does not have either.** A
+  guard on `shutil.which("pactl")` proves the client is installed, not
+  that a server is running. `PactlRunner.server_reachable()` is the
+  question to ask when the answer matters.
+- **Do not guard a mocked test on a real tool.** A class whose tests
+  all mock the tool it is named after does not need that tool, and a
+  guard keyed on it silently removes the class from CI.
+- **Fixtures must have the shape the real thing has.** A fixture that
+  carries a field the real output does not have (an extra id, a
+  renamed key) makes the code agree with the fixture instead of with
+  reality. When a fixture and the production parser disagree, the
+  fixture is the one to check first.
 - The CI workflow asserts that the display run executes *more* tests
   than the headless run. If a test module loses its skip guard, the
   suite silently skips and the job goes green having verified nothing.
@@ -170,9 +193,16 @@ that will bite anyone who forgets them.
 - A test that passes on the first run proves nothing. For a bug fix,
   revert **only the source change** and watch the test go red, then
   restore it. Record the result in the commit message.
+- **A mock that does not reproduce the real call is worse than no
+  mock.** A stand-in for a function that calls a callback has to call
+  the callback; one that does not leaves the caller unable to tell
+  success from failure, and the test passes either way.
 - Assert on the **arguments** a mock was called with, not just that it
   was called. `assert_called_once()` survives a mutation that passes
   the wrong value.
+- Assert the **message**, not just that a dialog appeared. Two
+  different conditions reported through the same predicate are
+  indistinguishable to the test, and the user reads the difference.
 - When a fix changes a contract, update the tests that pinned the old
   one and say so — do not delete them silently.
 - Measure the effect, not just the presence of it. A sink listing

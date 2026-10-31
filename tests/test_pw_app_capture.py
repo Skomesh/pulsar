@@ -16,6 +16,7 @@ from pulsar.utils.pw_app_capture import (
     SOURCE_TYPE_WINDOW,
     PortalCapture,
     PortalCaptureError,
+    PwDumpUnavailable,
     PwRecordError,
     _parse_object_path,
     discover_app_audio_nodes,
@@ -203,8 +204,32 @@ class TestDiscoverAppAudioNodes(unittest.TestCase):
         ]
 
     @mock.patch("pulsar.utils.pw_app_capture._run_pw_dump")
-    def test_returns_empty_when_no_pw_dump(self, mock_run):
-        mock_run.return_value = None
+    def test_raises_when_pw_dump_cannot_be_run(self, mock_run):
+        """The contract changed: an unavailable tool is not an empty result.
+
+        This test used to assert that a failed pw-dump produced an empty
+        list. That contract was the defect: the Capture tab could not
+        tell "the tool that finds apps is missing" apart from "no app is
+        playing audio", and showed the user the second message when the
+        first was true -- sending them off to start an app that was
+        already playing, with no explanation.
+
+        The empty-list contract is now reserved for the case it actually
+        describes: pw-dump ran and found nothing. That is asserted
+        separately below.
+        """
+        mock_run.side_effect = PwDumpUnavailable()
+        with self.assertRaises(PwDumpUnavailable):
+            discover_app_audio_nodes()
+
+    @mock.patch("pulsar.utils.pw_app_capture._run_pw_dump")
+    def test_returns_empty_when_pw_dump_finds_no_streams(self, mock_run):
+        """pw-dump ran, looked, and found nothing. That IS an empty list.
+
+        The distinction from the case above is the whole point: the
+        user is told nothing is playing, which is true.
+        """
+        mock_run.return_value = self._fake_pw_dump([])
         self.assertEqual(discover_app_audio_nodes(), [])
 
     @mock.patch("pulsar.utils.pw_app_capture._run_pw_dump")

@@ -14,9 +14,11 @@ from pulsar.utils.pactl_runner import LoopbackCycleError, PactlRunner
 from pulsar.utils.preset_manager import PresetManager
 from pulsar.utils.profile_manager import ProfileManager
 from pulsar.utils.pw_app_capture import (
+    PwDumpUnavailable,
     discover_app_audio_nodes,
 )
 from pulsar.utils.pw_diagnostics import (
+    PIPEWIRE_TOOLS_HINT,
     get_graph_snapshot,
     health_summary,
     pw_dump_available,
@@ -1961,6 +1963,17 @@ class MainWindow:
             self.capture_tree.delete(item)
         try:
             nodes = discover_app_audio_nodes(logger=self.add_output)
+        except PwDumpUnavailable as e:
+            # "The tool that finds apps is missing" is not the same as
+            # "no app is playing audio", and the tree used to claim the
+            # latter. That sends the user off to start an app that may
+            # already be running, and never explains the real problem.
+            self._capture_nodes = []
+            self.capture_selected_var.set(str(e))
+            self.capture_route_button.config(state="disabled")
+            self.capture_exclusive_button.config(state="disabled")
+            self.add_output(f"App Audio Discovery unavailable: {e}")
+            return
         except Exception as e:
             messagebox.showerror(
                 "Discovery error", f"Failed to enumerate nodes: {e}"
@@ -2054,7 +2067,8 @@ class MainWindow:
         if not pw_dump_available():
             ttk.Label(
                 top,
-                text="pw-dump not found — install pipewire-tools to enable diagnostics",
+                text=f"pw-dump not found — {PIPEWIRE_TOOLS_HINT} "
+                     "to enable diagnostics",
                 foreground="red",
             ).pack(side=tk.LEFT, padx=(10, 0))
 

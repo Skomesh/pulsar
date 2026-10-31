@@ -34,9 +34,27 @@ import shutil
 import subprocess
 from typing import Any, Dict, List, Optional
 
+#: The package that provides the pw-* tools, per distribution.
+#:
+#: There is no single name that is right everywhere, and "pipewire-tools"
+#: is right on NONE of them -- it does not exist on Debian/Ubuntu, Fedora
+#: or Arch. The app already depends on this package in every format it
+#: ships (debian/control: pipewire-bin, pulsar.spec: pipewire-utils,
+#: snap: pipewire-bin), so the names below are not a guess.
+#:
+#: Verified on Debian/Ubuntu: `dpkg -S $(command -v pw-dump)` ->
+#: pipewire-bin, and `dpkg -S $(command -v pactl)` -> pulseaudio-utils.
+PIPEWIRE_TOOLS_HINT = (
+    "install the pipewire tools for your distribution "
+    "(Debian/Ubuntu: pipewire-bin, Fedora: pipewire-utils, Arch: pipewire)"
+)
+
 
 def pw_dump_available() -> bool:
-    """True if pw-dump is installed (part of pipewire-tools)."""
+    """True if pw-dump is installed.
+
+    See PIPEWIRE_TOOLS_HINT for the per-distribution package names.
+    """
     return shutil.which("pw-dump") is not None
 
 
@@ -50,7 +68,9 @@ def _run_pw_dump(timeout: float = 5.0) -> List[Dict[str, Any]]:
     Raises PwDumpError on missing tool, timeout, or invalid output.
     """
     if not pw_dump_available():
-        raise PwDumpError("pw-dump not found on PATH. Install pipewire-tools.")
+        raise PwDumpError(
+            f"pw-dump not found on PATH. {PIPEWIRE_TOOLS_HINT}."
+        )
     try:
         proc = subprocess.run(
             ["pw-dump"],

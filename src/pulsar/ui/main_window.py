@@ -1519,10 +1519,8 @@ class MainWindow:
             outer,
             text=(
                 "App Audio Discovery — find the PipeWire node ID for each "
-                "app currently producing audio. Copy the node ID and paste "
-                "it into OBS (Application Audio Capture source), Discord, "
-                "EasyEffects, or any other PipeWire-aware tool to route "
-                "that app's audio anywhere you want."
+                "app currently producing audio, to paste into OBS, Discord "
+                "or any other PipeWire-aware tool."
             ),
             wraplength=700,
         ).pack(anchor=tk.W, pady=(0, 10))
@@ -1535,7 +1533,7 @@ class MainWindow:
 
         cols = ("id", "app", "class", "node_name")
         self.capture_tree = ttk.Treeview(
-            discover_frame, columns=cols, show="headings", height=10
+            discover_frame, columns=cols, show="headings", height=6
         )
         self.capture_tree.heading("id", text="PW Node ID")
         self.capture_tree.heading("app", text="Application")
@@ -1593,10 +1591,9 @@ class MainWindow:
         ttk.Label(
             route_frame,
             text=(
-                "Select one or more outputs below (Ctrl-click or Shift-click "
-                "for several) and click 'Route App Audio'. The selected "
-                "app's audio will be heard on those outputs and nowhere "
-                "else. Routing one app never affects another app."
+                "Select one or more outputs (Ctrl-click or Shift-click) and "
+                "click Route. The app is then heard on those outputs and "
+                "nowhere else."
             ),
             wraplength=700,
         ).pack(anchor=tk.W, pady=(0, 5))
@@ -1615,9 +1612,9 @@ class MainWindow:
         self.capture_route_listbox = tk.Listbox(
             route_row,
             selectmode=tk.EXTENDED,
-            height=4,
+            height=3,
             exportselection=False,
-            width=50,
+            width=60,
         )
         self.capture_route_listbox.pack(
             side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5)
@@ -1633,21 +1630,30 @@ class MainWindow:
         self.capture_route_listbox.bind(
             "<<ListboxSelect>>", self._on_capture_route_selection_changed
         )
+        # The buttons go BELOW the list, not beside it. Beside it they
+        # did not fit: the window is 800 wide, and the list plus three
+        # buttons ran past the edge, so the last one was clipped.
+        button_row = ttk.Frame(route_frame)
+        button_row.pack(fill=tk.X, pady=(5, 0))
         self.capture_route_button = ttk.Button(
-            route_row, text="Route App Audio", width=16,
+            button_row, text="Route App Audio", width=16,
             command=self._on_capture_route_to_outputs_clicked, state="disabled",
         )
-        self.capture_route_button.pack(side=tk.LEFT, padx=5)
-        ttk.Label(
-            route_frame,
-            text=(
-                "Route Here duplicates this app's audio onto the chosen "
-                "output and leaves it on its current one too. Output Only "
-                "Here moves the stream itself, so it is heard on the chosen "
-                "output only."
-            ),
-            wraplength=700,
-        ).pack(anchor=tk.W, pady=(5, 0))
+        self.capture_route_button.pack(side=tk.LEFT, padx=(0, 5))
+        # Putting an app's routing back is the other half of routing it.
+        # Without these there was no way back: routing an app to the
+        # wrong output could only be undone by restarting the session
+        # manager.
+        self.capture_route_remove_button = ttk.Button(
+            button_row, text="Remove Routing", width=15,
+            command=self._on_capture_route_remove_clicked, state="disabled",
+        )
+        self.capture_route_remove_button.pack(side=tk.LEFT, padx=5)
+        self.capture_route_custom_button = ttk.Button(
+            button_row, text="Custom Routing...", width=16,
+            command=self._show_custom_routing_dialog,
+        )
+        self.capture_route_custom_button.pack(side=tk.LEFT, padx=5)
         # Populate output list now (doesn't depend on selection)
         self._populate_capture_route_options()
 
@@ -1768,7 +1774,11 @@ class MainWindow:
         self._update_capture_route_button_state()
 
     def _update_capture_route_button_state(self):
-        """Enable Route only when there is an app AND an output chosen."""
+        """Enable Route only when there is an app AND an output chosen.
+
+        Removing an app's routing needs only the app -- there is no
+        output to choose, because the app goes back to the default one.
+        """
         picked = self._selected_capture_stream()
         has_app = bool(picked) and (
             picked[1].get("media_class") == "Stream/Output/Audio"
@@ -1776,7 +1786,288 @@ class MainWindow:
         has_output = bool(self._selected_capture_outputs())
         state = "normal" if (has_app and has_output) else "disabled"
         self.capture_route_button.config(state=state)
+        if hasattr(self, "capture_route_remove_button"):
+            self.capture_route_remove_button.config(
+                state="normal" if has_app else "disabled"
+            )
         return state
+
+    def _read_capture_routing_state(self):
+        """Read the graph and the streams, for reasoning about routing.
+
+        Returns a dict with the parsed graph (ports, names, links), the
+        playing streams keyed by their PipeWire node id, and the
+        system's default sink. None if the server could not be read --
+        a tool that could not answer is not the same as an empty graph.
+        """
+        try:
+            ports, names, links = pw_app_route.read_graph(
+                logger=self.add_output
+            )
+        except pw_app_route.PwLinkUnavailable as e:
+            self.add_output(f"App routing: {e}")
+            return None
+
+        streams = {}
+        for s in PactlRunner.list_sink_inputs(logger=self.add_output):
+            raw_id = s.get("node_id")
+            try:
+                node_id = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            streams[node_id] = {
+                "application": s.get("application") or "",
+                "sink": s.get("sink") or None,
+                "index": s.get("index"),
+            }
+        return {
+            "ports": ports,
+            "names": names,
+            "links": links,
+            "streams": streams,
+            "sinks": [
+                s.get("name", "") for s in PactlRunner.list_sinks(
+                    logger=self.add_output
+                )
+            ],
+            "default_sink": PactlRunner.get_default_sink(
+                logger=self.add_output
+            ),
+        }
+
+    def _customized_app_routes(self):
+        """The apps whose routing has been customised, and how.
+
+        An app is customised when it is not in its default state:
+        either the session manager has it on a sink other than the
+        default one, or it has native links to sinks the session
+        manager does not know about -- which is what routing it to a
+        second output does.
+
+        The session manager's OWN link is not counted: it is the one to
+        the sink the manager already has the stream on.
+        """
+        state = self._read_capture_routing_state()
+        if state is None:
+            return []
+        default_sink = state["default_sink"]
+        routes = []
+        for node_id, stream in state["streams"].items():
+            sm_sink = stream.get("sink")
+            extra = pw_app_route.stream_target_sinks(
+                state["ports"], state["names"], node_id, state["links"]
+            )
+            extra = {s for s in extra if s != sm_sink}
+            on_default = bool(default_sink) and sm_sink == default_sink
+            if not extra and on_default:
+                continue
+            routes.append({
+                "node_id": node_id,
+                "application": stream.get("application") or "?",
+                "sink": sm_sink,
+                "extra_sinks": sorted(extra),
+                "default_sink": default_sink,
+            })
+        return routes
+
+    def _remove_app_routing(self, node_id, app_str):
+        """Put one app back on the default sink.
+
+        Removes the native links that routing created for it, and moves
+        it back to the default output. The session manager's own link
+        is left alone: cutting it by hand makes a later move to that
+        sink a no-op, so the route would be silently lost.
+
+        Returns (ok, message).
+        """
+        state = self._read_capture_routing_state()
+        if state is None:
+            return False, "Could not read the audio server, so nothing was changed."
+        default_sink = state["default_sink"]
+        if not default_sink:
+            return False, (
+                "Could not determine the default output, so there is "
+                "nothing to return this app to."
+            )
+        live_sinks = set(state.get("sinks") or [])
+        if live_sinks and default_sink not in live_sinks:
+            return False, (
+                f"The default output '{default_sink}' is not available, "
+                f"so there is nowhere to return this app to."
+            )
+
+        stream = state["streams"].get(node_id)
+        sm_sink = stream.get("sink") if stream else None
+
+        # The default sink as the ONLY target is exactly a reset: the
+        # links to any other sink are broken, and the app is moved back.
+        plan = pw_app_route.plan_route(
+            ports=state["ports"],
+            node_names=state["names"],
+            stream_node_id=node_id,
+            target_sinks=[default_sink],
+            existing_links=state["links"],
+            session_manager_target=sm_sink,
+        )
+
+        def move_to(sink_name):
+            live = PactlRunner.list_sink_inputs(logger=self.add_output)
+            current = PactlRunner.sink_input_for_node_id(live, node_id)
+            if current is None:
+                return
+            PactlRunner.move_sink_input(
+                current["index"], sink_name, logger=self.add_output
+            )
+
+        try:
+            _created, removed = pw_app_route.apply_plan(
+                plan, logger=self.add_output, move=move_to
+            )
+        except pw_app_route.PwLinkUnavailable as e:
+            return False, str(e)
+        return True, (
+            f"{app_str} is back on {default_sink} "
+            f"({removed} extra link(s) removed)."
+        )
+
+    def _remove_all_app_routing(self):
+        """Put every customised app back on the default sink.
+
+        Returns how many apps were reset.
+        """
+        routes = self._customized_app_routes()
+        done = 0
+        for route in routes:
+            ok, message = self._remove_app_routing(
+                route["node_id"], route["application"]
+            )
+            if ok:
+                done += 1
+                self.add_output(message)
+            else:
+                self.add_output(
+                    f"Could not remove routing for {route['application']}: "
+                    f"{message}"
+                )
+        return done
+
+    def _on_capture_route_remove_clicked(self):
+        """The Remove Routing button: put the selected app back."""
+        picked = self._selected_capture_stream()
+        if not picked:
+            messagebox.showinfo(
+                "Remove Routing", "Select an app first."
+            )
+            return
+        app_str, node = picked
+        node_id = node.get("id")
+        if node_id is None:
+            messagebox.showerror(
+                "Remove Routing",
+                f"Could not identify '{app_str}' — the app did not report "
+                "a node id. Hit Refresh and try again.",
+            )
+            return
+        ok, message = self._remove_app_routing(node_id, app_str)
+        if not ok:
+            messagebox.showerror("Remove Routing", message)
+            return
+        self.add_output(message)
+        self.status_var.set(message)
+        self._refresh_capture_tree()
+
+    def _show_custom_routing_dialog(self):
+        """Show what has been customised, and offer to undo it.
+
+        The dialog is a thin shell: the list comes from
+        `_customized_app_routes` and the actions from
+        `_remove_app_routing` and `_remove_all_app_routing`, so the
+        behaviour is testable without a display.
+        """
+        routes = self._customized_app_routes()
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Custom App Routing")
+        dialog.transient(self.root)
+
+        body = ttk.Frame(dialog, padding="10")
+        body.pack(fill=tk.BOTH, expand=True)
+
+        if not routes:
+            ttk.Label(
+                body,
+                text=(
+                    "No app has customised routing. Every app is on the "
+                    "default output."
+                ),
+                wraplength=520,
+            ).pack(anchor=tk.W)
+            ttk.Button(
+                body, text="Close", command=dialog.destroy
+            ).pack(anchor=tk.E, pady=(10, 0))
+            return dialog
+
+        ttk.Label(
+            body,
+            text=(
+                "These apps have routing you set up. Removing an app's "
+                "routing breaks the links it created and puts it back on "
+                "the default output."
+            ),
+            wraplength=520,
+        ).pack(anchor=tk.W, pady=(0, 8))
+
+        listing = ttk.Frame(body)
+        listing.pack(fill=tk.BOTH, expand=True)
+
+        for route in routes:
+            row = ttk.Frame(listing)
+            row.pack(fill=tk.X, pady=2)
+            where = route["sink"] or "?"
+            if route["extra_sinks"]:
+                where += " and " + ", ".join(route["extra_sinks"])
+            ttk.Label(
+                row,
+                text=f"{route['application']}  ({where})",
+            ).pack(side=tk.LEFT)
+            ttk.Button(
+                row, text="Remove", width=10,
+                command=lambda r=route: self._remove_one_from_dialog(
+                    dialog, r
+                ),
+            ).pack(side=tk.RIGHT)
+
+        buttons = ttk.Frame(body)
+        buttons.pack(fill=tk.X, pady=(10, 0))
+        ttk.Button(
+            buttons, text="Remove All App Routing",
+            command=lambda: self._remove_all_from_dialog(dialog),
+        ).pack(side=tk.LEFT)
+        ttk.Button(
+            buttons, text="Close", command=dialog.destroy
+        ).pack(side=tk.RIGHT)
+        return dialog
+
+    def _remove_one_from_dialog(self, dialog, route):
+        """Remove one app's routing from the dialog."""
+        ok, message = self._remove_app_routing(
+            route["node_id"], route["application"]
+        )
+        if not ok:
+            messagebox.showerror("Remove Routing", message)
+            return
+        self.add_output(message)
+        self._refresh_capture_tree()
+        dialog.destroy()
+        self._show_custom_routing_dialog()
+
+    def _remove_all_from_dialog(self, dialog):
+        """Remove every app's routing from the dialog."""
+        done = self._remove_all_app_routing()
+        self._refresh_capture_tree()
+        dialog.destroy()
+        self._show_custom_routing_dialog()
+        self.status_var.set(f"Removed routing for {done} app(s).")
 
     def _on_capture_route_to_outputs_clicked(self):
         """Route the selected app's audio to the selected output(s).

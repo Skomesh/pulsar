@@ -16,7 +16,7 @@
 # exists to solve.
 #
 # Verified against a simulated runner that has every system binary except
-# the five audio tools: 323 passed, 154 skipped, 0 failed.
+# the five audio tools: 340 passed, 154 skipped, 0 failed.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

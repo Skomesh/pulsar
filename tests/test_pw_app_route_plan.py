@@ -213,16 +213,27 @@ class TestPlanRoute(unittest.TestCase):
         self.assertEqual(plan.create, [])
 
     def test_unknown_target_is_ignored(self):
-        """A target that does not exist must be ignored COMPLETELY.
+        """A target with no node in the graph gets no LINKS.
 
-        The assertion used to check only that no links were created. The
-        planner picked the vanished sink as the PRIMARY and set
-        needs_move, so it planned a move to a sink that does not exist.
+        There are no ports to link it to, so there is nothing to plan.
+        Whether the target EXISTS is the caller's question -- it has
+        the real sink list, and it refuses an output that has gone away
+        before it plans anything.
         """
         plan = self._plan(["tgt_gone"])
         self.assertEqual(plan.create, [])
-        self.assertIsNone(plan.primary)
-        self.assertFalse(plan.needs_move)
+        self.assertEqual(plan.remove, [])
+
+    def test_a_target_with_no_node_is_not_linked_to(self):
+        """The extra targets are the ones with ports to link.
+
+        A target with no node in the graph has no ports, so nothing is
+        planned for it. And a target that CAN be reached is preferred
+        as the primary.
+        """
+        plan = self._plan(["tgt_gone", "tgt_b"])
+        self.assertEqual(plan.create, [])
+        self.assertEqual(plan.primary, "tgt_b")
 
     def test_a_sink_with_no_input_ports_cannot_be_a_target(self):
         plan = self._plan(["paplay"])

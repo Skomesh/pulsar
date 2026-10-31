@@ -295,6 +295,38 @@ def channels_for(
 
 
 
+def stream_target_sinks(
+    ports: Dict[int, StreamPort],
+    node_names: Dict[int, str],
+    stream_node_id: int,
+    existing_links: Set[Tuple[int, int]],
+) -> Set[str]:
+    """The sinks a stream is heard on through NATIVE links.
+
+    Only links whose output port belongs to THIS stream count. A link
+    from another app is that app's routing, not this one's.
+    """
+    stream_out = set(_stream_out_ports(ports, stream_node_id))
+    sinks: Set[str] = set()
+    for out_id, in_id in sorted(existing_links):
+        if out_id not in stream_out:
+            continue
+        sink = _sink_of_port(ports, node_names, in_id)
+        if sink:
+            sinks.add(sink)
+    return sinks
+
+
+def read_graph(logger=None):
+    """The current graph: ports, node names and links.
+
+    One read of `pw-dump` and `pw-link -l`, so a caller that needs
+    both does not race the server between them.
+    """
+    dump = _run_pw_dump(logger)
+    return parse_ports(dump), parse_node_names(dump), read_links(logger)
+
+
 def plan_route(
     ports: Dict[int, StreamPort],
     node_names: Dict[int, str],
@@ -363,12 +395,21 @@ def plan_route(
 
     sm_sink = session_manager_target
 
-    # A target only counts if it actually resolves to a sink with an
-    # input port. A sink that has gone away -- unplugged since the
-    # output list was last refreshed -- has no node, so it can be
-    # neither linked to nor moved to. Choosing it as the primary
-    # planned a move to a sink that does not exist.
-    known_targets = [
+    # A target with no node in the graph cannot be LINKED to -- there
+    # are no ports to link. It can still be MOVED to: the move is the
+    # session manager's job and needs no port.
+    #
+    # That distinction matters. The default sink is often absent from
+    # the graph -- PipeWire's auto_null only appears while something
+    # is using it -- and a reset to it must still MOVE the app back.
+    # Requiring a node for the primary meant the reset removed the
+    # extra links and left the app on the sink it was supposed to
+    # leave.
+    #
+    # Whether a target EXISTS is the caller's question: it has the real
+    # sink list, and it refuses an output that has gone away before it
+    # gets here.
+    linkable = [
         s for s in target_sinks
         if any(
             name == s and p.direction == "in"
@@ -377,13 +418,23 @@ def plan_route(
         )
     ]
 
-    if sm_sink and sm_sink in known_targets:
+    if sm_sink and sm_sink in target_sinks:
         primary = sm_sink
-    elif known_targets:
-        primary = known_targets[0]
+    elif linkable:
+        # Prefer a target that can actually be reached. One with no
+        # node in the graph has no ports to link, so it is a worse
+        # primary than one that does.
+        primary = linkable[0]
+    elif target_sinks:
+        # Nothing is linkable. The target can still be MOVED to -- the
+        # move is the session manager's job and needs no port -- which
+        # is what a reset to the default sink needs when that sink has
+        # no node in the graph. PipeWire's auto_null is often absent
+        # from the graph while it is in use.
+        primary = target_sinks[0]
     else:
         primary = None
-    extra = [s for s in known_targets if s != primary]
+    extra = [s for s in linkable if s != primary]
 
     # Break the links that are wrong.
     for out_id, in_id in sorted(existing_links):

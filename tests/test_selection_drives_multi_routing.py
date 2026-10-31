@@ -168,7 +168,13 @@ class TestSelectionFeedsMultiRouting(unittest.TestCase):
                     groups.setdefault(id(child.master), []).append(label)
                 walk(child)
 
-        walk(self.root)
+        # Scoped to the MANAGE tab. The App Audio tab has routing
+        # controls of its own -- routing an app to outputs, removing
+        # that routing -- and they live in a different tab, so they are
+        # not a second routing panel here. The panel this test guards
+        # against coming back was in the Manage tab, so that is the tab
+        # that must have exactly one.
+        walk(self.app.manage_tab)
         self.assertEqual(
             len(groups), 1,
             f"expected exactly one routing panel, found {len(groups)}: "

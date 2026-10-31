@@ -363,11 +363,27 @@ def plan_route(
 
     sm_sink = session_manager_target
 
-    if sm_sink and sm_sink in target_sinks:
+    # A target only counts if it actually resolves to a sink with an
+    # input port. A sink that has gone away -- unplugged since the
+    # output list was last refreshed -- has no node, so it can be
+    # neither linked to nor moved to. Choosing it as the primary
+    # planned a move to a sink that does not exist.
+    known_targets = [
+        s for s in target_sinks
+        if any(
+            name == s and p.direction == "in"
+            for node_id, name in node_names.items()
+            for p in ports.values() if p.node_id == node_id
+        )
+    ]
+
+    if sm_sink and sm_sink in known_targets:
         primary = sm_sink
+    elif known_targets:
+        primary = known_targets[0]
     else:
-        primary = target_sinks[0]
-    extra = [s for s in target_sinks if s != primary]
+        primary = None
+    extra = [s for s in known_targets if s != primary]
 
     # Break the links that are wrong.
     for out_id, in_id in sorted(existing_links):
@@ -405,7 +421,7 @@ def plan_route(
         plan.create.append((out_id, in_id))
 
     plan.primary = primary
-    plan.needs_move = primary != sm_sink
+    plan.needs_move = bool(primary) and primary != sm_sink
     return plan
 
 

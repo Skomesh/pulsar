@@ -109,10 +109,16 @@ override_dh_auto_install:
 	# A bare redirect fails with ENOENT and aborts make -- no .deb at all.
 	# `install -D` below creates parents, which is why the icon and doc
 	# installs work and this one did not.
+	# A private temp file, not a fixed path in /tmp. dpkg-buildpackage
+	# runs with elevated privileges, and a world-writable /tmp path is
+	# a symlink target: anything that pre-created /tmp/pulsar.desktop
+	# as a symlink would have the build write through it.
+	desktop_tmp=$$(mktemp) && \
 	sed -e 's|PLACEHOLDER_EXEC_PATH|/usr/bin/pulsar-gui|g' pulsar.desktop \
-		> /tmp/pulsar.desktop
-	install -D -m 0644 /tmp/pulsar.desktop \
-		debian/pulsar/usr/share/applications/pulsar.desktop
+		> "$$desktop_tmp" && \
+	install -D -m 0644 "$$desktop_tmp" \
+		debian/pulsar/usr/share/applications/pulsar.desktop; \
+	rm -f "$$desktop_tmp"
 	# Install the README next to the manual page-less binary so the
 	# documentation the .deb ships is the one upstream wrote.
 	install -D -m 0644 README.md debian/pulsar/usr/share/doc/pulsar/README.md

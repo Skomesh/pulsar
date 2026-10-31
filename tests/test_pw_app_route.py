@@ -24,6 +24,7 @@ from pulsar.utils.pw_app_route import (
     StreamPort,
     channels_for,
     parse_links,
+    parse_node_names,
     parse_ports,
 )
 
@@ -35,8 +36,7 @@ PW_DUMP_OUTPUT = """[
     "id": 94,
     "type": "PipeWire:Interface:Node",
     "info": {
-      "id": 94,
-      "props": {
+            "props": {
         "node.name": "vsink_a",
         "media.class": "Stream/Output/Audio",
         "object.linger": "false"
@@ -47,8 +47,7 @@ PW_DUMP_OUTPUT = """[
     "id": 61,
     "type": "PipeWire:Interface:Node",
     "info": {
-      "id": 61,
-      "props": {
+            "props": {
         "node.name": "paplay",
         "media.class": "Stream/Output/Audio",
         "application.name": "paplay"
@@ -59,8 +58,7 @@ PW_DUMP_OUTPUT = """[
     "id": 45,
     "type": "PipeWire:Interface:Port",
     "info": {
-      "id": 45,
-      "props": {
+            "props": {
         "node.id": 94,
         "port.name": "playback_FL",
         "port.direction": "in"
@@ -71,8 +69,7 @@ PW_DUMP_OUTPUT = """[
     "id": 72,
     "type": "PipeWire:Interface:Port",
     "info": {
-      "id": 72,
-      "props": {
+            "props": {
         "node.id": 94,
         "port.name": "playback_FR",
         "port.direction": "in"
@@ -83,8 +80,7 @@ PW_DUMP_OUTPUT = """[
     "id": 52,
     "type": "PipeWire:Interface:Port",
     "info": {
-      "id": 52,
-      "props": {
+            "props": {
         "node.id": 94,
         "port.name": "monitor_FL",
         "port.direction": "out"
@@ -95,8 +91,7 @@ PW_DUMP_OUTPUT = """[
     "id": 92,
     "type": "PipeWire:Interface:Port",
     "info": {
-      "id": 92,
-      "props": {
+            "props": {
         "node.id": 94,
         "port.name": "monitor_FR",
         "port.direction": "out"
@@ -107,8 +102,7 @@ PW_DUMP_OUTPUT = """[
     "id": 68,
     "type": "PipeWire:Interface:Port",
     "info": {
-      "id": 68,
-      "props": {
+            "props": {
         "node.id": 61,
         "port.name": "output_FL",
         "port.direction": "out"
@@ -119,8 +113,7 @@ PW_DUMP_OUTPUT = """[
     "id": 85,
     "type": "PipeWire:Interface:Port",
     "info": {
-      "id": 85,
-      "props": {
+            "props": {
         "node.id": 61,
         "port.name": "output_FR",
         "port.direction": "out"
@@ -132,12 +125,16 @@ PW_DUMP_OUTPUT = """[
 
 # Real `pw-link -l` output. The format is a port id and name, then the
 # links attached to it, indented with |-> or |<-
-PW_LINK_OUTPUT = """  94 vsink_a:playback_FL
+# The port ids here are the PORT ids from PW_DUMP_OUTPUT: 45 is
+# vsink_a's playback_FL input port and 72 its playback_FR. The old
+# fixture used 94, which is vsink_a's NODE id -- a different id space
+# entirely -- so the link referred to a port that does not exist.
+PW_LINK_OUTPUT = """  45 vsink_a:playback_FL
  102   |<-   68 paplay:output_FL
   72 vsink_a:playback_FR
  103   |<-   85 paplay:output_FR
   68 paplay:output_FL
-102   |->   94 vsink_a:playback_FL
+102   |->   45 vsink_a:playback_FL
   85 paplay:output_FR
 103   |->   72 vsink_a:playback_FR
 """
@@ -267,6 +264,33 @@ class TestChannelsFor(unittest.TestCase):
         self.assertEqual(channels_for(ports, [45], []), [])
 
 
+class TestParseNodeNames(unittest.TestCase):
+    """The node id is the TOP-LEVEL id.
+
+    Real `pw-dump` puts the object id at the top level; `info` has no
+    "id" key at all. The fixture used to carry it in both places, so a
+    parser reading the wrong one passed against the fixture and would
+    have failed against every real PipeWire.
+
+    This had no direct test at all, which is why the fixture's mistake
+    went unnoticed.
+    """
+
+    def test_it_maps_node_ids_to_names(self):
+        names = parse_node_names(PW_DUMP_OUTPUT)
+        self.assertEqual(names[94], "vsink_a")
+        self.assertEqual(names[61], "paplay")
+
+    def test_no_node_gets_a_missing_id(self):
+        names = parse_node_names(PW_DUMP_OUTPUT)
+        self.assertNotIn(
+            None, names,
+            "a node was keyed by a missing id -- the parser read the "
+            "wrong place for it",
+        )
+        self.assertEqual(len(names), 2)
+
+
 class TestParseLinks(unittest.TestCase):
     """The live link list, so a route can be inspected and undone."""
 
@@ -275,7 +299,7 @@ class TestParseLinks(unittest.TestCase):
 
     def test_finds_the_link_from_stream_to_sink(self):
         links = self._run()
-        self.assertIn((68, 94), links)
+        self.assertIn((68, 45), links)
         self.assertIn((85, 72), links)
 
     def test_does_not_duplicate_reverse_direction(self):

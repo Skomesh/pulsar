@@ -26,6 +26,20 @@ def pactl_available():
     return shutil.which("pactl") is not None
 
 
+def pw_dump_available():
+    """Is pw-dump installed?
+
+    `get_pw_node` runs `pw-dump` directly, so a class guarded only on
+    `pactl` fails HARD on a host that has pulseaudio-utils but not
+    pipewire-utils -- a very common combination -- instead of skipping.
+    """
+    return shutil.which("pw-dump") is not None
+
+
+def pactl_and_pw_dump_available():
+    return pactl_available() and pw_dump_available()
+
+
 def get_pw_node(name_substring):
     """Return pw-dump node dicts whose node.name contains the substring."""
     result = subprocess.run(

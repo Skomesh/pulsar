@@ -190,9 +190,13 @@ class TestPortalCapture(unittest.TestCase):
             pc.start()
 
 
-@unittest.skipUnless(
-    pactl_or_pw_dump_available(), "pw-dump not available"
-)
+# No skip guard. Every test in this class mocks
+# `pulsar.utils.pw_app_capture._run_pw_dump` and feeds it synthetic
+# JSON, so none of them needs the pw-dump binary. The class-level
+# `skipUnless` keyed on that binary anyway, so on a CI runner without
+# pipewire-utils -- exactly the environment run_ci_equivalent.sh
+# simulates -- the whole class vanished from the run and the
+# app-discovery filter logic was never checked there.
 class TestDiscoverAppAudioNodes(unittest.TestCase):
     """Filter logic on a synthetic pw-dump JSON."""
 

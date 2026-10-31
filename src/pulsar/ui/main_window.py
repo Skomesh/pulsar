@@ -3722,15 +3722,30 @@ class MainWindow:
         self._reselect_after_refresh(sink_name)
 
     def _reselect_after_refresh(self, sink_name):
-        """After refresh_all_views(), re-find and re-select the sink in the tree."""
-        for tree_item in self.unified_tree.get_children():
-            for child in self.unified_tree.get_children(tree_item):
-                item = self.unified_tree.item(child)
-                vals = item.get("values", ())
+        """After refresh_all_views(), re-find and re-select the sink in the tree.
+
+        The WHOLE tree is searched, not just two levels. A virtual
+        device's sink sits at depth three -- the root, the "Virtual
+        Devices" group, the "Virtual Device: X" row, then the sink row
+        itself -- so the old two-level scan never reached it. After
+        Apply or Stop All the tree is rebuilt, the selection is
+        destroyed with it, and this could not put it back: the routing
+        panel came back empty.
+        """
+        def find(item):
+            for child in self.unified_tree.get_children(item):
+                vals = self.unified_tree.item(child).get("values", ())
                 if len(vals) >= 3 and vals[1] == "sink" and vals[2] == sink_name:
-                    self.unified_tree.selection_set(child)
-                    self.unified_tree.focus(child)
-                    return
+                    return child
+                found = find(child)
+                if found is not None:
+                    return found
+            return None
+
+        found = find("")
+        if found is not None:
+            self.unified_tree.selection_set(found)
+            self.unified_tree.focus(found)
 
     def _generate_detailed_info(self, entity_id, entity_type, entity_name, tree_item_id):
         """Generate tiered technical specifications for the selected item."""

@@ -48,62 +48,62 @@ PW_DUMP_OUTPUT = """[
   {
     "id": 94,
     "type": "PipeWire:Interface:Node",
-    "info": {"id": 94, "props": {"node.name": "tgt_a"}}
+    "info": {"props": {"node.name": "tgt_a"}}
   },
   {
     "id": 95,
     "type": "PipeWire:Interface:Node",
-    "info": {"id": 95, "props": {"node.name": "tgt_b"}}
+    "info": {"props": {"node.name": "tgt_b"}}
   },
   {
     "id": 61,
     "type": "PipeWire:Interface:Node",
-    "info": {"id": 61, "props": {"node.name": "paplay", "media.class": "Stream/Output/Audio"}}
+    "info": {"props": {"node.name": "paplay", "media.class": "Stream/Output/Audio"}}
   },
   {
     "id": 62,
     "type": "PipeWire:Interface:Node",
-    "info": {"id": 62, "props": {"node.name": "paplay", "media.class": "Stream/Output/Audio"}}
+    "info": {"props": {"node.name": "paplay", "media.class": "Stream/Output/Audio"}}
   },
   {
     "id": 45,
     "type": "PipeWire:Interface:Port",
-    "info": {"id": 45, "props": {"node.id": 94, "port.name": "playback_FL", "port.direction": "in"}}
+    "info": {"props": {"node.id": 94, "port.name": "playback_FL", "port.direction": "in"}}
   },
   {
     "id": 72,
     "type": "PipeWire:Interface:Port",
-    "info": {"id": 72, "props": {"node.id": 94, "port.name": "playback_FR", "port.direction": "in"}}
+    "info": {"props": {"node.id": 94, "port.name": "playback_FR", "port.direction": "in"}}
   },
   {
     "id": 80,
     "type": "PipeWire:Interface:Port",
-    "info": {"id": 80, "props": {"node.id": 95, "port.name": "playback_FL", "port.direction": "in"}}
+    "info": {"props": {"node.id": 95, "port.name": "playback_FL", "port.direction": "in"}}
   },
   {
     "id": 88,
     "type": "PipeWire:Interface:Port",
-    "info": {"id": 88, "props": {"node.id": 95, "port.name": "playback_FR", "port.direction": "in"}}
+    "info": {"props": {"node.id": 95, "port.name": "playback_FR", "port.direction": "in"}}
   },
   {
     "id": 68,
     "type": "PipeWire:Interface:Port",
-    "info": {"id": 68, "props": {"node.id": 61, "port.name": "output_FL", "port.direction": "out"}}
+    "info": {"props": {"node.id": 61, "port.name": "output_FL", "port.direction": "out"}}
   },
   {
     "id": 85,
     "type": "PipeWire:Interface:Port",
-    "info": {"id": 85, "props": {"node.id": 61, "port.name": "output_FR", "port.direction": "out"}}
+    "info": {"props": {"node.id": 61, "port.name": "output_FR", "port.direction": "out"}}
   },
   {
     "id": 91,
     "type": "PipeWire:Interface:Port",
-    "info": {"id": 91, "props": {"node.id": 62, "port.name": "output_FL", "port.direction": "out"}}
+    "info": {"props": {"node.id": 62, "port.name": "output_FL", "port.direction": "out"}}
   },
   {
     "id": 92,
     "type": "PipeWire:Interface:Port",
-    "info": {"id": 92, "props": {"node.id": 62, "port.name": "output_FR", "port.direction": "out"}}
+    "info": {"props": {"node.id": 62, "port.name": "output_FR", "port.direction": "out"}}
   }
 ]
 """
@@ -213,8 +213,16 @@ class TestPlanRoute(unittest.TestCase):
         self.assertEqual(plan.create, [])
 
     def test_unknown_target_is_ignored(self):
+        """A target that does not exist must be ignored COMPLETELY.
+
+        The assertion used to check only that no links were created. The
+        planner picked the vanished sink as the PRIMARY and set
+        needs_move, so it planned a move to a sink that does not exist.
+        """
         plan = self._plan(["tgt_gone"])
         self.assertEqual(plan.create, [])
+        self.assertIsNone(plan.primary)
+        self.assertFalse(plan.needs_move)
 
     def test_a_sink_with_no_input_ports_cannot_be_a_target(self):
         plan = self._plan(["paplay"])

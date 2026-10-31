@@ -7,6 +7,7 @@ import os
 import re
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+from tkinter import font as tkfont
 from typing import Any, Dict, List, Optional
 
 from pulsar.utils import pw_app_route
@@ -1483,191 +1484,206 @@ class MainWindow:
             messagebox.showerror("Delete Profile", f"Failed to delete '{name}'.")
 
     def setup_capture_tab(self):
-        """Set up the App Audio Discovery tab (formerly Phase 5a).
+        """Set up the App Audio Discovery tab.
 
-        PURPOSE: Find the PipeWire node ID for any application
-        currently producing audio, so you can paste it into OBS,
-        Discord, EasyEffects, or any other tool that consumes PW
-        audio sources. This is the headline use case — once you
-        have a node ID, you can route app audio anywhere you want
-        in any PipeWire-aware app.
-
-        What it does:
-        - Scans pw-dump for active Stream/Input/Audio and
-          Stream/Output/Audio nodes (apps currently producing audio)
-        - Shows them in a table with PW node ID, app name, stream
-          class, and node name
-        - Lets you copy the node ID or node name to clipboard with
-          one click
+        PURPOSE: Find the PipeWire node ID for any application currently
+        producing audio, so you can paste it into OBS, Discord,
+        EasyEffects, or any other tool that consumes PW audio sources.
+        That is the headline use case. The same list of streams is what
+        the routing controls act on: select an app, select one or more
+        outputs, and that app's audio goes to those outputs and nowhere
+        else.
 
         What it does NOT do (intentionally):
         - Open an app picker dialog (the portal flow was broken on
           most systems and never returned a usable node ID)
         - Record to a file (capture-to-file with no follow-up
           destination is just clutter; if you want to record app
-          audio, use OBS, EasyEffects, or pw-record directly)
+          audio, use OBS, EasyEffect, or pw-record directly)
 
-        The portal flow and capture-to-file were removed because
-        they didn't do anything the user couldn't do more easily
-        with a dedicated tool. This tab now has one job: tell you
-        the node ID for each running app's audio.
+        LAYOUT
+        ------
+        This tab does NOT use the scrollable-tab helper the other tabs
+        use. That helper sizes its inner frame to the canvas WIDTH and
+        never to its height, so nothing inside it can grow: a tree with
+        a fixed `height=6` stayed six rows tall with 180 pixels of
+        page left over. The tab content here is short enough to fit
+        the window, so it is packed straight into the notebook tab and
+        the tree takes the space that is left.
+
+        There are no LabelFrames. They are for option groups, not for
+        content sections, and three stacked ones made this look like a
+        web form. Section headings are bold labels, and one separator
+        divides discovery from routing.
         """
-        outer = self._setup_scrollable_tab(self.capture_tab, padding="10")
+        outer = ttk.Frame(self.capture_tab, padding="12")
+        outer.pack(fill=tk.BOTH, expand=True)
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(2, weight=1)      # the table absorbs the slack
 
-        # Header explanation
+        # A font tuple's FIRST element is a FAMILY, not a named font.
+        # ("TkDefaultFont", 9) therefore asks for a family called
+        # "TkDefaultFont", does not find one, and silently falls back
+        # to a fixed-width face -- the label renders monospace and
+        # nobody notices. Resolve the family properly.
+        family = tkfont.nametofont("TkDefaultFont").actual("family")
+
+        style = ttk.Style()
+        style.configure("Pulsar.Primary.TButton", font=(family, 9, "bold"))
+        style.configure("Pulsar.Heading.TLabel", font=(family, 10, "bold"))
+
+        # One line of orientation, not a paragraph.
         ttk.Label(
             outer,
             text=(
-                "App Audio Discovery — find the PipeWire node ID for each "
-                "app currently producing audio, to paste into OBS, Discord "
-                "or any other PipeWire-aware tool."
+                "Copy a PipeWire node ID into OBS, Discord or EasyEffect."
             ),
-            wraplength=700,
-        ).pack(anchor=tk.W, pady=(0, 10))
+            font=(family, 9),
+        ).grid(row=0, column=0, sticky=tk.W, pady=(0, 6))
 
-        # Treeview of active streams
-        discover_frame = ttk.LabelFrame(
-            outer, text="Currently Active App Audio Streams", padding="10"
-        )
-        discover_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        # ---- the table: the headline -------------------------------
+        # The heading sits left, the table's own commands sit right.
+        # Every action lives beside the thing it acts on.
+        head = ttk.Frame(outer)
+        head.grid(row=1, column=0, sticky=tk.EW, pady=(0, 4))
+        ttk.Label(
+            head, text="Playing app audio streams",
+            style="Pulsar.Heading.TLabel",
+        ).pack(side=tk.LEFT)
+        ttk.Button(
+            head, text="Refresh", width=9,
+            command=self._refresh_capture_tree,
+        ).pack(side=tk.RIGHT)
+        ttk.Button(
+            head, text="Copy Node Name", width=15,
+            command=self._copy_selected_capture_node_name,
+        ).pack(side=tk.RIGHT, padx=(0, 6))
+        ttk.Button(
+            head, text="Copy Node ID", width=13,
+            style="Pulsar.Primary.TButton",
+            command=self._copy_selected_capture_node_id,
+        ).pack(side=tk.RIGHT)
+
+        tree_box = ttk.Frame(outer)
+        tree_box.grid(row=2, column=0, sticky=tk.NSEW)
 
         cols = ("id", "app", "class", "node_name")
         self.capture_tree = ttk.Treeview(
-            discover_frame, columns=cols, show="headings", height=6
+            tree_box, columns=cols, show="headings", height=6
         )
         self.capture_tree.heading("id", text="PW Node ID")
         self.capture_tree.heading("app", text="Application")
         self.capture_tree.heading("class", text="Stream Class")
         self.capture_tree.heading("node_name", text="Node Name")
-        self.capture_tree.column("id", width=100, anchor=tk.W)
-        self.capture_tree.column("app", width=200, anchor=tk.W)
-        self.capture_tree.column("class", width=180, anchor=tk.W)
-        self.capture_tree.column("node_name", width=300, anchor=tk.W)
-        self.capture_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        # The three fixed columns do not stretch, so Tk cannot squeeze
+        # them. Their widths used to total 780px into a 739px tree, and
+        # Tk shrank them all by a tenth -- which clipped the "PW Node
+        # ID" heading at the minimum window width, with no horizontal
+        # scrollbar to recover it. The node name takes what is left.
+        # The declared widths total 644 so that even the 700px minimum
+        # window leaves room for the scrollbar without Tk having to
+        # squeeze a column -- a squeezed column clips its heading, and
+        # there is no horizontal scrollbar to recover it.
+        self.capture_tree.column("id", width=84, anchor=tk.W, stretch=False)
+        self.capture_tree.column("app", width=150, anchor=tk.W, stretch=False)
+        self.capture_tree.column("class", width=150, anchor=tk.W, stretch=False)
+        self.capture_tree.column("node_name", width=260, anchor=tk.W)
 
+        # The scrollbar is packed FIRST. Packed after the tree -- which
+        # was packed with expand=True -- it was starved to zero width
+        # and never appeared at all, so a long list of apps could not
+        # be scrolled.
         tree_scroll = ttk.Scrollbar(
-            discover_frame, orient=tk.VERTICAL,
+            tree_box, orient=tk.VERTICAL,
             command=self.capture_tree.yview,
         )
         tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.capture_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.capture_tree.configure(yscrollcommand=tree_scroll.set)
         self.capture_tree.bind(
             "<<TreeviewSelect>>", self._on_capture_tree_select
         )
 
-        # Action buttons
-        disc_buttons = ttk.Frame(outer)
-        disc_buttons.pack(fill=tk.X, pady=(0, 10))
-        ttk.Button(
-            disc_buttons, text="Refresh",
-            command=self._refresh_capture_tree, width=12,
-        ).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(
-            disc_buttons, text="Copy Node ID",
-            command=self._copy_selected_capture_node_id, width=15,
-        ).pack(side=tk.LEFT, padx=5)
-        ttk.Button(
-            disc_buttons, text="Copy Node Name",
-            command=self._copy_selected_capture_node_name, width=15,
-        ).pack(side=tk.LEFT, padx=5)
-
-        # --- Route to output(s) ---
-        # Per-APP routing to one OR MORE outputs.
-        #
-        # The old control here was a single-select combo plus two
-        # buttons, and the "Route Here" one looped the app's SINK's
-        # monitor to the target. A monitor carries every stream on that
-        # sink, so the route was a property of the DEVICE rather than of
-        # the app: routing one app destroyed another app's route, and an
-        # app could never be heard on two outputs at once.
-        #
-        # Now the outputs are a multi-select list and there is ONE
-        # button, because there is one operation: this app's audio goes
-        # to these outputs, and nowhere else.
-        route_frame = ttk.LabelFrame(
-            outer, text="Route App Audio To Output(s)", padding="10"
-        )
-        route_frame.pack(fill=tk.X, pady=(0, 10))
+        # ---- the status line, directly under the table ------------
+        # It used to be at the bottom of the tab, 280 pixels below the
+        # empty table it explains, which read as a page footer.
+        self.capture_selected_var = tk.StringVar(value="(no stream selected)")
         ttk.Label(
-            route_frame,
-            text=(
-                "Select one or more outputs (Ctrl-click or Shift-click) and "
-                "click Route. The app is then heard on those outputs and "
-                "nowhere else."
-            ),
-            wraplength=700,
-        ).pack(anchor=tk.W, pady=(0, 5))
-        # Filter checkbox — when checked, only hardware outputs are
+            outer, textvariable=self.capture_selected_var, font=(family, 9)
+        ).grid(row=3, column=0, sticky=tk.W, pady=(6, 0))
+
+        # ---- routing band ------------------------------------------
+        ttk.Separator(outer, orient=tk.HORIZONTAL).grid(
+            row=4, column=0, sticky=tk.EW, pady=(10, 8)
+        )
+        route_head = ttk.Frame(outer)
+        route_head.grid(row=5, column=0, sticky=tk.EW, pady=(0, 6))
+        ttk.Label(
+            route_head, text="Route app audio to outputs",
+            style="Pulsar.Heading.TLabel",
+        ).pack(side=tk.LEFT)
+        # This one acts on the whole route set, not on the selection,
+        # so it belongs with the section heading rather than with the
+        # output list.
+        self.capture_route_custom_button = ttk.Button(
+            route_head, text="Custom Routing...", width=16,
+            command=self._show_custom_routing_dialog,
+        )
+        self.capture_route_custom_button.pack(side=tk.RIGHT)
+
+        band = ttk.Frame(outer)
+        band.grid(row=6, column=0, sticky=tk.W)
+
+        outputs = ttk.Frame(band)
+        outputs.pack(side=tk.LEFT, fill=tk.BOTH)
+        list_holder = ttk.Frame(outputs)
+        list_holder.pack(side=tk.TOP, fill=tk.X)
+        self.capture_route_listbox = tk.Listbox(
+            list_holder, selectmode=tk.EXTENDED, height=4,
+            exportselection=False, width=42,
+        )
+        self.capture_route_listbox.pack(
+            side=tk.LEFT, fill=tk.BOTH, expand=False
+        )
+        listbox_scroll = ttk.Scrollbar(
+            list_holder, orient=tk.VERTICAL,
+            command=self.capture_route_listbox.yview,
+        )
+        listbox_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.capture_route_listbox.configure(yscrollcommand=listbox_scroll.set)
+        self.capture_route_listbox.bind(
+            "<<ListboxSelect>>", self._on_capture_route_selection_changed
+        )
+        # Filter checkbox -- when checked, only hardware outputs are
         # shown. Unchecked (default) also includes virtual sinks for
         # OBS-style capture setups.
         self._capture_route_hardware_only_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
-            route_frame,
-            text="Show hardware outputs only",
+            outputs, text="Show hardware outputs only",
             variable=self._capture_route_hardware_only_var,
             command=self._populate_capture_route_options,
-        ).pack(anchor=tk.W)
-        route_row = ttk.Frame(route_frame)
-        route_row.pack(fill=tk.X, pady=(5, 0))
-        self.capture_route_listbox = tk.Listbox(
-            route_row,
-            selectmode=tk.EXTENDED,
-            height=3,
-            exportselection=False,
-            width=60,
-        )
-        self.capture_route_listbox.pack(
-            side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5)
-        )
-        listbox_scroll = ttk.Scrollbar(
-            route_row, orient=tk.VERTICAL,
-            command=self.capture_route_listbox.yview,
-        )
-        listbox_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        self.capture_route_listbox.configure(
-            yscrollcommand=listbox_scroll.set
-        )
-        self.capture_route_listbox.bind(
-            "<<ListboxSelect>>", self._on_capture_route_selection_changed
-        )
-        # The buttons go BELOW the list, not beside it. Beside it they
-        # did not fit: the window is 800 wide, and the list plus three
-        # buttons ran past the edge, so the last one was clipped.
-        button_row = ttk.Frame(route_frame)
-        button_row.pack(fill=tk.X, pady=(5, 0))
+        ).pack(anchor=tk.W, pady=(4, 0))
+
+        actions = ttk.Frame(band)
+        actions.pack(side=tk.LEFT, fill=tk.Y, padx=(16, 0))
         self.capture_route_button = ttk.Button(
-            button_row, text="Route App Audio", width=16,
+            actions, text="Route App Audio", width=16,
+            style="Pulsar.Primary.TButton",
             command=self._on_capture_route_to_outputs_clicked, state="disabled",
         )
-        self.capture_route_button.pack(side=tk.LEFT, padx=(0, 5))
+        self.capture_route_button.pack(side=tk.LEFT, padx=(0, 8))
         # Putting an app's routing back is the other half of routing it.
-        # Without these there was no way back: routing an app to the
+        # Without this there was no way back: routing an app to the
         # wrong output could only be undone by restarting the session
         # manager.
         self.capture_route_remove_button = ttk.Button(
-            button_row, text="Remove Routing", width=15,
+            actions, text="Remove Routing", width=15,
             command=self._on_capture_route_remove_clicked, state="disabled",
         )
-        self.capture_route_remove_button.pack(side=tk.LEFT, padx=5)
-        self.capture_route_custom_button = ttk.Button(
-            button_row, text="Custom Routing...", width=16,
-            command=self._show_custom_routing_dialog,
-        )
-        self.capture_route_custom_button.pack(side=tk.LEFT, padx=5)
+        self.capture_route_remove_button.pack(side=tk.LEFT)
+
         # Populate output list now (doesn't depend on selection)
         self._populate_capture_route_options()
-
-        # Selected node display
-        selected_frame = ttk.LabelFrame(
-            outer, text="Selected Stream", padding="10"
-        )
-        selected_frame.pack(fill=tk.X, pady=(0, 10))
-        self.capture_selected_var = tk.StringVar(value="(no stream selected)")
-        ttk.Label(
-            selected_frame,
-            textvariable=self.capture_selected_var,
-            font=("Courier", 10),
-        ).pack(anchor=tk.W)
 
         # Initial discovery
         self._refresh_capture_tree()

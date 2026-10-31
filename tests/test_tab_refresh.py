@@ -38,15 +38,44 @@ class FakeStringVar:
         self._value = value
 
 
-class FakeCombobox:
-    """Records config(values=...) calls."""
+class FakeListbox:
+    """A multi-select listbox stub, with the real one's API."""
 
     def __init__(self):
-        self.values = ()
+        self._items = []
+        self._selected = set()
 
-    def config(self, **kwargs):
-        if "values" in kwargs:
-            self.values = tuple(kwargs["values"])
+    def delete(self, _start, _end=None):
+        # Tk clears the selection when items are deleted.
+        self._items = []
+        self._selected = set()
+
+    def insert(self, _end, item):
+        self._items.append(item)
+
+    def size(self):
+        return len(self._items)
+
+    def get(self, index):
+        return self._items[index]
+
+    def curselection(self):
+        return tuple(sorted(self._selected))
+
+    def selection_set(self, index):
+        self._selected.add(index)
+
+    def selection_clear(self, *a):
+        self._selected = set()
+
+    def set_selection(self, names):
+        """Test helper: select the rows with these names."""
+        self._selected = {
+            i for i, name in enumerate(self._items) if name in names
+        }
+
+    def selected_names(self):
+        return [self._items[i] for i in self.curselection()]
 
 
 class FakeBoolVar:
@@ -67,12 +96,21 @@ class FakeTree:
     def delete(self, *a):
         self.deleted += 1
 
+    def selection(self):
+        return ()
+
+    def item(self, _i):
+        return {"values": ()}
+
+    def index(self, _i):
+        return 0
+
 
 def make_window(tab_text="App Audio"):
     """A MainWindow stub with only what the two methods under test touch."""
     win = object.__new__(MainWindow)
-    win.capture_route_var = FakeStringVar("")
-    win.capture_route_combo = FakeCombobox()
+    win.capture_route_listbox = FakeListbox()
+    win.capture_route_button = mock.Mock()
     win._capture_route_hardware_only_var = FakeBoolVar(False)
     win.capture_tree = FakeTree()
     win._capture_nodes = []
@@ -137,8 +175,11 @@ class TestAppAudioTabRefreshesOnEntry(unittest.TestCase):
         ):
             self.win._populate_capture_route_options()
         self.assertEqual(
-            self.win.capture_route_combo.values,
-            ("alsa_output.new_headset", "game_sink  [virtual]"),
+            [
+                self.win.capture_route_listbox.get(i)
+                for i in range(self.win.capture_route_listbox.size())
+            ],
+            ["alsa_output.new_headset", "game_sink  [virtual]"],
         )
 
 
@@ -148,11 +189,18 @@ class TestRouteSelectionSurvivesRefresh(unittest.TestCase):
     Once the refresh runs on every tab entry, a reset-to-first would fire on
     every visit -- the user would pick headphones, tab away, tab back, and be
     looking at speakers again.
+
+    The list is MULTI-select now, so the whole selection has to survive,
+    not just one entry.
     """
 
     def setUp(self):
         self.win = make_window()
-        self.win.capture_route_var.set("headphones  [virtual]")
+        # The list starts populated, as it is after the first refresh.
+        self.win.capture_route_listbox._items = ["speakers", "headphones  [virtual]"]
+        self.win.capture_route_listbox.set_selection(
+            {"headphones  [virtual]"}
+        )
 
     def _rebuild(self, outputs):
         with mock.patch(
@@ -163,17 +211,38 @@ class TestRouteSelectionSurvivesRefresh(unittest.TestCase):
 
     def test_existing_selection_is_kept(self):
         self._rebuild(["speakers", "headphones  [virtual]"])
-        self.assertEqual(self.win.capture_route_var.get(), "headphones  [virtual]")
+        self.assertEqual(
+            self.win.capture_route_listbox.selected_names(),
+            ["headphones  [virtual]"],
+        )
 
-    def test_vanished_device_falls_back_to_first(self):
-        """If the picked sink is unplugged, fall back rather than keep a ghost."""
+    def test_a_vanished_device_is_dropped_from_the_selection(self):
+        """If the picked sink is unplugged, it must not stay selected.
+
+        Keeping it would route to a device that is gone, so the handler
+        refuses the whole route -- and the user cannot tell which of
+        their picks was the problem.
+        """
         self._rebuild(["speakers", "monitor_headphones"])
-        self.assertEqual(self.win.capture_route_var.get(), "speakers")
+        self.assertEqual(
+            self.win.capture_route_listbox.selected_names(), []
+        )
 
-    def test_no_outputs_at_all_clears_selection(self):
+    def test_several_selected_outputs_all_survive(self):
+        """The multi-select is the point: the whole selection persists."""
+        self.win.capture_route_listbox.set_selection(
+            {"speakers", "headphones  [virtual]"}
+        )
+        self._rebuild(["speakers", "headphones  [virtual]", "monitor_headphones"])
+        self.assertEqual(
+            sorted(self.win.capture_route_listbox.selected_names()),
+            ["headphones  [virtual]", "speakers"],
+        )
+
+    def test_no_outputs_at_all_clears_the_selection(self):
         self._rebuild([])
-        self.assertEqual(self.win.capture_route_var.get(), "")
-        self.assertEqual(self.win.capture_route_combo.values, ())
+        self.assertEqual(self.win.capture_route_listbox.selected_names(), [])
+        self.assertEqual(self.win.capture_route_listbox.size(), 0)
 
 
 class TestCreateDevicePopupRemoved(unittest.TestCase):

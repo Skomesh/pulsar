@@ -13,6 +13,9 @@ Pulsar is a fork of [pactl-gui](https://github.com/Skrappjaw/pactl-gui) by Skrap
 
 - **Sink / Source / Both (duplex)** choice at device creation time
 - **Loopback routing** — wire virtual devices to your real output with one click
+- **Per-app routing** — send one application to one *or more* outputs, and to
+  nowhere else. Routing an app never disturbs another app, even when they
+  share a device.
 - **Profile persistence** — save and reload complete routing topologies
 - **Streamer-oriented defaults** — opinionated presets for game + voice + music + mic
 
@@ -42,6 +45,9 @@ usually *not* in the same one:
 |---|---|---|---|
 | `pactl` | `pulseaudio-utils` | `pulseaudio-utils` | `libpulse` |
 | `pw-dump` | `pipewire-bin` | `pipewire-utils` | `pipewire` |
+
+Per-app routing also uses `pw-link`, which lives in the **same package**
+as `pw-dump` on every distribution — so it adds no extra dependency.
 
 ```bash
 # Debian/Ubuntu

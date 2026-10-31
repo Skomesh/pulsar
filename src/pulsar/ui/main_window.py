@@ -9,6 +9,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from typing import Any, Dict, List, Optional
 
+from pulsar.utils import pw_app_route
 from pulsar.utils.device_names import classify_device_name, detect_device_type
 from pulsar.utils.pactl_runner import LoopbackCycleError, PactlRunner
 from pulsar.utils.preset_manager import PresetManager
@@ -1559,21 +1560,30 @@ class MainWindow:
             command=self._copy_selected_capture_node_name, width=15,
         ).pack(side=tk.LEFT, padx=5)
 
-        # --- Route to output ---
-        # Lets the user pick a hardware output for the selected app's
-        # audio. Creates a module-loopback from the app's monitor source
-        # to the chosen sink, so the audio is heard on that output.
-        # Simpler than going to Manage tab to set up routing manually.
+        # --- Route to output(s) ---
+        # Per-APP routing to one OR MORE outputs.
+        #
+        # The old control here was a single-select combo plus two
+        # buttons, and the "Route Here" one looped the app's SINK's
+        # monitor to the target. A monitor carries every stream on that
+        # sink, so the route was a property of the DEVICE rather than of
+        # the app: routing one app destroyed another app's route, and an
+        # app could never be heard on two outputs at once.
+        #
+        # Now the outputs are a multi-select list and there is ONE
+        # button, because there is one operation: this app's audio goes
+        # to these outputs, and nowhere else.
         route_frame = ttk.LabelFrame(
-            outer, text="Route App Audio To Output", padding="10"
+            outer, text="Route App Audio To Output(s)", padding="10"
         )
         route_frame.pack(fill=tk.X, pady=(0, 10))
         ttk.Label(
             route_frame,
             text=(
-                "Pick a hardware output below and click 'Route Here' — the "
-                "selected app's audio will be heard on that output. Use the "
-                "Manage tab for more complex routing (multiple outputs, etc)."
+                "Select one or more outputs below (Ctrl-click or Shift-click "
+                "for several) and click 'Route App Audio'. The selected "
+                "app's audio will be heard on those outputs and nowhere "
+                "else. Routing one app never affects another app."
             ),
             wraplength=700,
         ).pack(anchor=tk.W, pady=(0, 5))
@@ -1589,27 +1599,32 @@ class MainWindow:
         ).pack(anchor=tk.W)
         route_row = ttk.Frame(route_frame)
         route_row.pack(fill=tk.X, pady=(5, 0))
-        self.capture_route_var = tk.StringVar(value="")
-        self.capture_route_combo = ttk.Combobox(
-            route_row, textvariable=self.capture_route_var,
-            state="readonly", values=(), width=50,
+        self.capture_route_listbox = tk.Listbox(
+            route_row,
+            selectmode=tk.EXTENDED,
+            height=4,
+            exportselection=False,
+            width=50,
         )
-        self.capture_route_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
-        self.capture_route_combo.bind(
-            "<<ComboboxSelected>>", self._on_capture_route_combo_select
+        self.capture_route_listbox.pack(
+            side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5)
+        )
+        listbox_scroll = ttk.Scrollbar(
+            route_row, orient=tk.VERTICAL,
+            command=self.capture_route_listbox.yview,
+        )
+        listbox_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.capture_route_listbox.configure(
+            yscrollcommand=listbox_scroll.set
+        )
+        self.capture_route_listbox.bind(
+            "<<ListboxSelect>>", self._on_capture_route_selection_changed
         )
         self.capture_route_button = ttk.Button(
-            route_row, text="Route Here", width=12,
-            command=self._on_capture_route_clicked, state="disabled",
+            route_row, text="Route App Audio", width=16,
+            command=self._on_capture_route_to_outputs_clicked, state="disabled",
         )
         self.capture_route_button.pack(side=tk.LEFT, padx=5)
-        # Exclusive routing: move the app's stream itself, so its audio stops
-        # on the previous device instead of being duplicated onto this one.
-        self.capture_exclusive_button = ttk.Button(
-            route_row, text="Output Only Here", width=16,
-            command=self._on_capture_exclusive_clicked, state="disabled",
-        )
-        self.capture_exclusive_button.pack(side=tk.LEFT, padx=5)
         ttk.Label(
             route_frame,
             text=(
@@ -1677,166 +1692,231 @@ class MainWindow:
         # Hardware first (the user's actual speakers/headphones),
         # then virtual (for monitoring/OBS capture)
         all_outputs = hardware + virtual
-        # Preserve the current selection across a refresh if it still
-        # exists. Resetting to all_outputs[0] every time would silently
-        # discard the user's pick whenever the list is rebuilt — which,
+        # Preserve the SELECTION across a refresh where the outputs still
+        # exist. Resetting the selection every time would silently
+        # discard the user's pick whenever the list is rebuilt -- which,
         # now that this runs on every tab entry, would be on every visit.
-        prior = self.capture_route_var.get()
-        self.capture_route_combo.config(values=all_outputs)
-        if prior and prior in all_outputs:
-            self.capture_route_var.set(prior)
-        elif all_outputs:
-            self.capture_route_var.set(all_outputs[0])
-        else:
-            self.capture_route_var.set("")
+        #
+        # The selected NAMES are captured, not the selected indices: the
+        # list is rebuilt, so the indices mean something different
+        # afterwards.
+        prior = set(self._selected_capture_output_labels())
+        self.capture_route_listbox.delete(0, tk.END)
+        for name in all_outputs:
+            self.capture_route_listbox.insert(tk.END, name)
+        for index, name in enumerate(all_outputs):
+            if name in prior:
+                self.capture_route_listbox.selection_set(index)
         self._capture_route_all_outputs = all_outputs  # cache for sanitization
+        self._update_capture_route_button_state()
 
-    def _on_capture_route_combo_select(self, _event=None):
-        """Sanitize combo selection — strip [virtual] marker when reading."""
-        sel = self.capture_route_var.get()
-        if sel.endswith("  [virtual]"):
-            self.capture_route_var.set(sel.replace("  [virtual]", ""))
+    def _capture_route_listbox_names(self):
+        """The names currently shown in the outputs listbox."""
+        try:
+            return [
+                self.capture_route_listbox.get(i)
+                for i in range(self.capture_route_listbox.size())
+            ]
+        except (tk.TclError, AttributeError):
+            return []
+
+    def _selected_capture_output_labels(self):
+        """The selected listbox entries, with the [virtual] marker intact.
+
+        These are the DISPLAY labels, so they can be matched against the
+        rebuilt list. `_selected_capture_outputs` strips the marker and
+        returns the real sink names.
+        """
+        try:
+            return [
+                self.capture_route_listbox.get(index)
+                for index in self.capture_route_listbox.curselection()
+            ]
+        except (tk.TclError, AttributeError):
+            return []
+
+    def _selected_capture_outputs(self):
+        """The output sink names the user has selected.
+
+        The [virtual] marker is a display aid, not part of the sink
+        name, so it is stripped here.
+        """
+        names = []
+        for index in self.capture_route_listbox.curselection():
+            name = self.capture_route_listbox.get(index)
+            if name.endswith("  [virtual]"):
+                name = name[:-len("  [virtual]")]
+            if name:
+                names.append(name)
+        return names
+
+    def _on_capture_route_selection_changed(self, _event=None):
+        """The output selection changed — the button follows it."""
+        self._update_capture_route_button_state()
+
+    def _update_capture_route_button_state(self):
+        """Enable Route only when there is an app AND an output chosen."""
+        picked = self._selected_capture_stream()
+        has_app = bool(picked) and (
+            picked[1].get("media_class") == "Stream/Output/Audio"
+        )
+        has_output = bool(self._selected_capture_outputs())
+        state = "normal" if (has_app and has_output) else "disabled"
+        self.capture_route_button.config(state=state)
+        return state
+
+    def _on_capture_route_to_outputs_clicked(self):
+        """Route the selected app's audio to the selected output(s).
+
+        This routes the APP, not the sink it happens to be playing to.
+
+        The old implementation looped the app's current sink's MONITOR
+        to the target. A monitor carries every stream on that sink, so
+        the route belonged to the device: routing app B to vsink2
+        removed app A's route to vsink1, because both apps shared the
+        same monitor source and the reroute step deletes loopbacks with
+        a matching source.
+
+        Now the app's own PipeWire stream node is addressed directly. A
+        stream's output port belongs to that one app, so two apps of the
+        same binary route independently, and one app can be heard on
+        several outputs at once.
+        """
+        picked = self._selected_capture_stream()
+        if not picked:
+            messagebox.showinfo(
+                "Route App Audio", "Select an app first."
+            )
+            return
+        app_str, node = picked
+
+        targets = self._selected_capture_outputs()
+        if not targets:
+            messagebox.showinfo(
+                "Route App Audio",
+                "No output selected. Pick one or more from the list.",
+            )
+            return
+
+        node_id = node.get("id")
+        if node_id is None:
+            messagebox.showerror(
+                "Route App Audio",
+                f"Could not identify '{app_str}' — the app did not report "
+                "a node id. Hit Refresh and try again.",
+            )
+            return
+
+        # The output list can be stale — a device unplugged since the
+        # last refresh. Routing to a sink that is gone silently does
+        # nothing, and the user would be told it worked.
+        live_sinks = {
+            s.get("name", "")
+            for s in PactlRunner.list_sinks(logger=self.add_output)
+        }
+        gone = [t for t in targets if t not in live_sinks]
+        if gone:
+            messagebox.showerror(
+                "Route App Audio",
+                f"Output{'s' if len(gone) > 1 else ''} "
+                f"{', '.join(repr(g) for g in gone)} "
+                f"no longer exist{'s' if len(gone) > 1 else ''}. "
+                "Hit Refresh and try again.",
+            )
+            return
+
+        if not pw_app_route.pw_link_available():
+            messagebox.showerror(
+                "Route App Audio",
+                "Per-app routing needs the PipeWire link tools, which are "
+                "not installed. See the requirements in the README.",
+            )
+            return
+
+        # The live sink inputs, so the app's stream is found by its EXACT
+        # PipeWire node id. Matching on node.name cannot tell two
+        # instances of one application apart — they share a node.name.
+        streams = PactlRunner.list_sink_inputs(logger=self.add_output)
+        stream = PactlRunner.sink_input_for_node_id(streams, node_id)
+        if stream is None:
+            messagebox.showerror(
+                "Route App Audio",
+                f"No playing stream found for {app_str}. The app may have "
+                "stopped producing audio — hit Refresh.",
+            )
+            return
+
+        # Which sink the session manager currently has this stream on.
+        # It owns the link to the primary target, so the compat layer
+        # reports the app's real sink.
+        sm_target = stream.get("sink") or None
+
+        try:
+            dump = pw_app_route._run_pw_dump(logger=self.add_output)
+            ports = pw_app_route.parse_ports(dump)
+            names = pw_app_route.parse_node_names(dump)
+            links = pw_app_route.parse_links(
+                pw_app_route._run_pw_link(["-l", "-I"], self.add_output).stdout
+            )
+        except pw_app_route.PwLinkUnavailable as e:
+            messagebox.showerror("Route App Audio", str(e))
+            return
+
+        plan = pw_app_route.plan_route(
+            ports=ports,
+            node_names=names,
+            stream_node_id=node_id,
+            target_sinks=targets,
+            existing_links=links,
+            session_manager_target=sm_target,
+        )
+
+        moved = {"ok": False}
+
+        def move_to(sink_name):
+            # The index is looked up NOW, not cached: PulseAudio recycles
+            # sink-input indices, so a cached one can name a different
+            # stream by the time it is used.
+            live = PactlRunner.list_sink_inputs(logger=self.add_output)
+            current = PactlRunner.sink_input_for_node_id(live, node_id)
+            if current is None:
+                return
+            if PactlRunner.move_sink_input(
+                current["index"], sink_name, logger=self.add_output
+            ):
+                moved["ok"] = True
+
+        try:
+            created, removed = pw_app_route.apply_plan(
+                plan, logger=self.add_output, move=move_to
+            )
+        except pw_app_route.PwLinkUnavailable as e:
+            messagebox.showerror("Route App Audio", str(e))
+            return
+
+        if plan.needs_move and not moved["ok"]:
+            messagebox.showerror(
+                "Route App Audio",
+                f"The audio server refused to move {app_str} to "
+                f"'{plan.primary}'. It may have stopped playing in the "
+                "meantime.",
+            )
+            return
+
+        summary = ", ".join(targets)
+        if created or removed:
+            self.add_output(
+                f"Routed {app_str} -> {summary} "
+                f"({created} link(s) added, {removed} removed)"
+            )
+        else:
+            self.add_output(f"{app_str} already routed to {summary}")
+        self.status_var.set(f"{app_str} now outputs to {summary}")
+        self._refresh_capture_tree()
 
     def _on_capture_route_refresh_outputs(self):
         """Refresh the output dropdown (called when checkbox toggles)."""
         self._populate_capture_route_options()
-
-    def _on_capture_route_clicked(self):
-        """Route the selected app's audio to the chosen hardware output.
-
-        We need the app's monitor source to create a loopback. The
-        Stream/Output/Audio node itself isn't routable directly — we
-        need to look up the .monitor source for the sink or use the
-        node's monitor source. Since the discovery gives us Stream
-        nodes (apps producing audio), the audio is going to a real
-        sink already; we need to either:
-        1. Use the app's current sink's monitor source and create a
-           loopback to the chosen output (this REDIRECTS the audio).
-        2. Use pw-link to manipulate the graph (more invasive).
-
-        The cleanest UX is approach #1: find what sink the app's
-        Stream/Output/Audio node is connected to, then loopback
-        that sink's monitor to the chosen output. This duplicates
-        the audio rather than replacing it (no audio loss).
-        """
-        sel = self.capture_tree.selection()
-        if not sel:
-            messagebox.showinfo("Route App Audio", "Select a stream first.")
-            return
-        target = self.capture_route_var.get()
-        # Strip the [virtual] marker if present
-        if target.endswith("  [virtual]"):
-            target = target.replace("  [virtual]", "")
-        if not target:
-            messagebox.showinfo(
-                "Route App Audio",
-                "No output selected. Pick one from the dropdown.",
-            )
-            return
-        # Find the sink that the selected Stream/Output/Audio node is
-        # connected to. discover_app_audio_nodes already populated
-        # sink_name from pw-dump Links, so we just read it from the
-        # selected row's stored metadata.
-        values = self.capture_tree.item(sel[0])["values"]
-        if not values:
-            return
-        pw_id, app_str, cls, name = values
-        # Look up the sink_name from our parallel data structure.
-        # self._capture_nodes is updated whenever _refresh_capture_tree
-        # rebuilds the treeview, so the indices match.
-        sink_name = None
-        if hasattr(self, "_capture_nodes") and self._capture_nodes:
-            try:
-                idx = int(self.capture_tree.index(sel[0]))
-                if 0 <= idx < len(self._capture_nodes):
-                    sink_name = self._capture_nodes[idx].get("sink_name")
-            except (ValueError, tk.TclError):
-                pass
-        if not sink_name:
-            messagebox.showerror(
-                "Route failed",
-                f"Could not find the sink that app '{app_str}' is using. "
-                "Try refreshing the list, or use the Manage tab to route "
-                "manually.",
-            )
-            return
-        monitor = PactlRunner.monitor_source_for(sink_name)
-        if not monitor:
-            messagebox.showerror(
-                "Route failed",
-                f"Could not find monitor source for sink '{sink_name}'.",
-            )
-            return
-        # Check for existing loopback from this monitor to target
-        # (idempotent: if already routed to the chosen target, no-op)
-        existing = PactlRunner.list_loopbacks()
-        already_routed = False
-        for lb in existing:
-            if lb.get("source") == monitor and lb.get("sink") == target:
-                already_routed = True
-                break
-        if already_routed:
-            messagebox.showinfo(
-                "Already routed",
-                f"'{app_str}' is already routed to '{target}'.",
-            )
-            return
-        # Reroute path: if the app is currently routed elsewhere,
-        # remove the old loopbacks first. This makes the action
-        # "force hard enough" — the app's audio is now only heard
-        # on the new target, not duplicated. The user can always
-        # set up multiple targets via the Manage tab if they want
-        # duplication.
-        removed = []
-        if existing:
-            for lb in existing:
-                if lb.get("source") == monitor and lb.get("sink") != target:
-                    if PactlRunner.unload_loopback(
-                        lb["id"], logger=self.add_output
-                    ):
-                        removed.append(lb["sink"])
-        # Bug fix: create_loopback's first argument is the SOURCE
-        # monitor (e.g. "easyeffects_sink.monitor"), not the sink name
-        # itself. Earlier versions of this code passed sink_name
-        # directly, which created loopbacks with the wrong source
-        # field AND bypassed the existing-loopback check above (which
-        # looks for source == monitor). Result: clicking Route
-        # multiple times created infinite duplicate loopbacks.
-        lb_id = None
-        try:
-            lb_id = PactlRunner.create_loopback(
-                monitor, target, latency_msec=self.get_loopback_latency_ms(),
-                logger=self.add_output,
-            )
-        except LoopbackCycleError as exc:
-            # Refusing loudly beats a feedback loop at full volume. Show the
-            # chain so the user can see which existing route is the other
-            # half and drop it on the Manage tab.
-            messagebox.showerror(
-                "Would create a feedback loop",
-                f"Routing '{app_str}' to '{target}' would close this loop:\n\n"
-                f"    {exc.render()}\n\n"
-                "That would feed the audio back into its own input. Remove "
-                "one of those routes on the Manage tab first.",
-            )
-            return
-        if lb_id:
-            if removed:
-                self.add_output(
-                    f"Rerouted '{app_str}' (via {sink_name}): "
-                    f"removed old route(s) to {', '.join(removed)} -> "
-                    f"now on '{target}' (loopback #{lb_id})"
-                )
-            else:
-                self.add_output(
-                    f"Routed '{app_str}' (via {sink_name}) -> '{target}' "
-                    f"(loopback #{lb_id})"
-                )
-            self.refresh_all_views()
-        else:
-            messagebox.showerror(
-                "Route failed", f"Could not create loopback to '{target}'."
-            )
 
     def _selected_capture_stream(self):
         """Return (app_label, node_dict) for the selected tree row, or None.
@@ -1861,102 +1941,6 @@ class MainWindow:
             return None
         return app_str, self._capture_nodes[idx]
 
-    def _on_capture_exclusive_clicked(self):
-        """Move the selected app's stream so it plays on the chosen output only.
-
-        Unlike _on_capture_route_clicked this does not loopback. It moves the
-        stream itself with `pactl move-sink-input`, so the audio stops on
-        whatever device it was using before. That is what "only output to this
-        device" means; the loopback path can only duplicate.
-
-        The sink-input index is looked up at click time rather than cached at
-        refresh time. PA recycles those indices, so a cached one can name a
-        different stream by the time the button is pressed.
-        """
-        picked = self._selected_capture_stream()
-        if not picked:
-            messagebox.showinfo(
-                "Output only here", "Select a stream first."
-            )
-            return
-        app_str, node = picked
-
-        target = self.capture_route_var.get()
-        if target.endswith("  [virtual]"):
-            target = target.replace("  [virtual]", "")
-        if not target:
-            messagebox.showinfo(
-                "Output only here", "No output selected. Pick one from the dropdown."
-            )
-            return
-
-        sinks = {s.get("name", "") for s in PactlRunner.list_sinks(logger=self.add_output)}
-        if target not in sinks:
-            messagebox.showerror(
-                "Output only here",
-                f"Output '{target}' does not exist anymore. Hit Refresh and try again.",
-            )
-            return
-
-        # Match the discovery row to a live sink input. pactl does not expose
-        # the owning pid on a sink input, and the discovery side does not
-        # always have a pid either, so node name is the key that both views
-        # reliably carry.
-        node_name = node.get("node_name") or ""
-        if not node_name:
-            messagebox.showerror(
-                "Output only here",
-                "Could not tell which stream this row refers to — the app "
-                "did not report a node name. Hit Refresh, or use 'Route Here'.",
-            )
-            return
-
-        streams = PactlRunner.list_sink_inputs(logger=self.add_output)
-        candidates = PactlRunner.sink_inputs_for_node(streams, node_name)
-        if not candidates:
-            messagebox.showerror(
-                "Output only here",
-                f"No playing stream found for {app_str}. The app may have "
-                "stopped producing audio — hit Refresh.",
-            )
-            return
-        if len(candidates) > 1:
-            messagebox.showerror(
-                "Output only here",
-                f"{app_str} has {len(candidates)} streams matching "
-                f"'{node_name}' and Pulsar cannot tell which one you mean. "
-                "Use 'Route Here', which works on the whole device instead of "
-                "a single stream.",
-            )
-            return
-
-        stream = candidates[0]
-        if stream["sink"] == target:
-            self.add_output(
-                f"{app_str} already outputs only to '{target}' (no change)"
-            )
-            return
-
-        previous = stream["sink"] or "(unknown device)"
-        if not PactlRunner.move_sink_input(
-            stream["index"], target, logger=self.add_output
-        ):
-            messagebox.showerror(
-                "Output only here",
-                f"The audio server refused to move {app_str} to '{target}'. "
-                "It may have stopped playing in the meantime.",
-            )
-            return
-
-        self.add_output(
-            f"{app_str}: exclusive output moved {previous} -> {target} "
-            f"(sink-input #{stream['index']})"
-        )
-        self.status_var.set(
-            f"{app_str} now outputs only to '{target}'"
-        )
-        self._refresh_capture_tree()
-
     def _refresh_capture_tree(self):
         """Re-scan for current app audio streams and rebuild the tree."""
         for item in self.capture_tree.get_children():
@@ -1971,7 +1955,6 @@ class MainWindow:
             self._capture_nodes = []
             self.capture_selected_var.set(str(e))
             self.capture_route_button.config(state="disabled")
-            self.capture_exclusive_button.config(state="disabled")
             self.add_output(f"App Audio Discovery unavailable: {e}")
             return
         except Exception as e:
@@ -2005,26 +1988,20 @@ class MainWindow:
         sel = self.capture_tree.selection()
         if not sel:
             self.capture_selected_var.set("(no stream selected)")
-            self.capture_route_button.config(state="disabled")
-            self.capture_exclusive_button.config(state="disabled")
+            self._update_capture_route_button_state()
             return
         values = self.capture_tree.item(sel[0])["values"]
         if not values:
-            self.capture_route_button.config(state="disabled")
-            self.capture_exclusive_button.config(state="disabled")
+            self._update_capture_route_button_state()
             return
         pw_id, app, cls, name = values
         self.capture_selected_var.set(
             f"PW ID: {pw_id}    Class: {cls}    Name: {name}"
         )
-        # Only enable the routing actions for output streams (apps producing
-        # audio). An input stream has nothing to route to an output device.
-        if cls == "Stream/Output/Audio":
-            self.capture_route_button.config(state="normal")
-            self.capture_exclusive_button.config(state="normal")
-        else:
-            self.capture_route_button.config(state="disabled")
-            self.capture_exclusive_button.config(state="disabled")
+        # Only enable the routing action for output streams (apps
+        # producing audio). An input stream has nothing to route to an
+        # output device.
+        self._update_capture_route_button_state()
 
     def _copy_selected_capture_node_id(self):
         sel = self.capture_tree.selection()

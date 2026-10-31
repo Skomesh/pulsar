@@ -152,8 +152,6 @@ class TestCaptureTabSaysWhyItIsEmpty(unittest.TestCase):
         self.assertEqual(self.app.capture_tree.get_children(), ())
         self.assertEqual(
             str(self.app.capture_route_button.cget("state")), "disabled")
-        self.assertEqual(
-            str(self.app.capture_exclusive_button.cget("state")), "disabled")
 
 
 if __name__ == "__main__":

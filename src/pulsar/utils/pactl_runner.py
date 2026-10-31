@@ -190,6 +190,11 @@ class PactlRunner:
               - 'application': application.name, or '' if unset
               - 'node_name': node.name, or '' if unset
               - 'media': media.name, or '' if unset
+              - 'node_id': object.id, or '' if unset. This IS the PipeWire
+                node id of the stream, 1:1, so it is the exact key that
+                joins this view to the discovery view (which reports
+                PipeWire node ids). Two instances of one application
+                share a node.name, so node_id is what tells them apart.
               - 'sink_index': the index of the sink it is playing to
               - 'sink': the NAME of that sink, or '' if the sink has gone away
             Empty list if none.
@@ -219,6 +224,7 @@ class PactlRunner:
                     'application': '',
                     'node_name': '',
                     'media': '',
+                    'node_id': '',
                     'sink_index': '',
                     'sink': '',
                 }
@@ -238,6 +244,9 @@ class PactlRunner:
                         current['node_name'] = value
                     elif key == 'media.name':
                         current['media'] = value
+                    elif key == 'object.id':
+                        # The PipeWire node id of the stream, 1:1.
+                        current['node_id'] = value
                 elif stripped.startswith('Sink:'):
                     sink_index = stripped.partition(':')[2].strip()
                     current['sink_index'] = sink_index
@@ -270,6 +279,33 @@ class PactlRunner:
             s for s in streams
             if s.get('node_name') == node_name or s.get('application') == node_name
         ]
+
+    @staticmethod
+    def sink_input_for_node_id(
+        streams: List[Dict[str, Any]], node_id: Any
+    ) -> Optional[Dict[str, Any]]:
+        """Return the sink input whose PipeWire node id matches exactly.
+
+        ``object.id`` on a sink input IS the PipeWire node id of the
+        stream, 1:1, so this is an exact join between the discovery view
+        (which reports PipeWire node ids) and this view (which reports
+        sink-input indices).
+
+        Matching on node.name cannot do this: two instances of the same
+        application share a node.name, so a name lookup either picks an
+        arbitrary one of them or has to refuse. With the node id there
+        is nothing to guess.
+
+        Returns None when there is no match, or more than one -- the
+        caller must not act on an ambiguous answer.
+        """
+        if node_id is None:
+            return None
+        wanted = str(node_id)
+        matches = [s for s in streams if s.get("node_id") == wanted]
+        if len(matches) == 1:
+            return matches[0]
+        return None
 
     @staticmethod
     def move_sink_input(index: str, sink_name: str, logger=None) -> bool:

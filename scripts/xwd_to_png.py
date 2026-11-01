@@ -52,9 +52,16 @@ def parse_xwd(blob):
                 off = x * 4
                 if off + 4 > len(line):
                     break
-                b, g, r, _a = line[off:off + 4]
-                if not big_endian:
-                    b, g, r = r, g, b
+                if big_endian:
+                    # A, R, G, B in memory order.
+                    _a, r, g, b = line[off:off + 4]
+                else:
+                    # B, G, R, A in memory order.
+                    b, g, r, _a = line[off:off + 4]
+                # The swap that used to be here assigned B, G, R the
+                # wrong way round and then wrote them out as R, G, B --
+                # so every screenshot came out with red and blue
+                # exchanged. An amber warning (#996600) came out blue.
                 row += bytes((r, g, b))
         elif bits_per_pixel == 24:
             for x in range(pixmap_width):
@@ -65,7 +72,10 @@ def parse_xwd(blob):
                 off = x * 3
                 if off + 3 > len(line):
                     break
-                b, g, r = line[off:off + 3]
+                if big_endian:
+                    r, g, b = line[off:off + 3]
+                else:
+                    b, g, r = line[off:off + 3]
                 row += bytes((r, g, b))
         else:  # 16-bit, 5-6-5
             for x in range(pixmap_width):

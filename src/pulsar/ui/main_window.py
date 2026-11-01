@@ -84,6 +84,7 @@ class MainWindow:
         self.tab_control.pack(expand=1, fill="both")
 
         # Set up tab contents
+        self._setup_ui_styles()
         self.setup_create_tab()
         self.setup_manage_tab()
         self.setup_profiles_tab()
@@ -194,6 +195,61 @@ class MainWindow:
 
         return inner
 
+    def _derive_fonts(self):
+        """The app's fonts, derived from the user's default font.
+
+        A hard-coded 9pt label is 9pt whatever the user's font is, so
+        on a system with a 16pt default those widgets were the only
+        thing on the tab that stayed small.
+
+        `actual("size")` is in POINTS. A copied font can carry a pixel
+        size instead, and a style configured with one measured 12pt
+        when the default was 16pt -- so the heading's size is set
+        explicitly, in points.
+
+        The derived fonts are made by COPYING the named font and then
+        configuring the copy. `tkfont.Font(font=<a font>, weight="bold",
+        size=10)` silently ignores the keyword arguments -- the new
+        font just adopts the source font's weight and size -- so a
+        heading built that way came out neither bold nor any larger.
+
+        Returns:
+            A (base, bold, heading, italic) tuple of tkinter font
+            objects.
+        """
+        named_font = tkfont.nametofont("TkDefaultFont")
+        base_size = named_font.actual("size")
+        bold = named_font.copy()
+        bold.configure(weight="bold")
+        heading = named_font.copy()
+        heading.configure(weight="bold", size=base_size + 1)
+        italic = named_font.copy()
+        italic.configure(slant="italic")
+        return named_font, bold, heading, italic
+
+    def _setup_ui_styles(self):
+        """Configure the app's own styles, once.
+
+        Every tab uses these, so a widget that looks the same on one
+        tab looks the same on all of them, and a change to the system
+        font reaches all of them.
+
+        Returns:
+            The (base, bold, heading, italic) fonts.
+        """
+        base, bold, heading, italic = self._derive_fonts()
+        style = ttk.Style()
+        style.configure("Pulsar.Primary.TButton", font=bold)
+        style.configure("Pulsar.Heading.TLabel", font=heading)
+        style.configure("Pulsar.Section.TLabel", font=bold)
+        style.configure("Pulsar.Meta.TLabel", font=base)
+        # The last component of a ttk style name is the WIDGET CLASS,
+        # not a layout -- "Pulsar.Meta.TLabel.Italic" asks for a layout
+        # called "Italic", which does not exist.
+        style.configure("Pulsar.Italic.TLabel", font=italic)
+        self._fonts = (base, bold, heading, italic)
+        return self._fonts
+
     def setup_create_tab(self):
         """Set up the Create tab content."""
         frame = self._setup_scrollable_tab(self.create_tab, padding="10")
@@ -202,7 +258,7 @@ class MainWindow:
         ttk.Label(
             frame,
             text="Create a new virtual audio device",
-            font=("", 12, "bold")
+            style="Pulsar.Heading.TLabel",
         ).grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 10))
 
         # Device type radio (Sink / Source / Both)
@@ -349,20 +405,25 @@ class MainWindow:
         # Load preset names into combobox
         self.refresh_preset_list()
 
-        # Save preset button
+        # Save and delete buttons.
+        #
+        # These were emoji glyphs (a floppy disk and a wastebasket). An
+        # emoji font is not always installed -- on this host there are
+        # 480 fonts and one of them is an emoji font, and Tk did not
+        # use it -- so the two buttons rendered as a pair of EMPTY
+        # BOXES with no label at all. A word renders in every font.
         self.save_preset_btn = ttk.Button(
             preset_frame,
-            text="💾",
-            width=3,
+            text="Save",
+            width=6,
             command=self.save_current_preset
         )
         self.save_preset_btn.grid(row=0, column=1, padx=(5, 0))
 
-        # Delete preset button
         self.delete_preset_btn = ttk.Button(
             preset_frame,
-            text="🗑️",
-            width=3,
+            text="Delete",
+            width=7,
             command=self.delete_current_preset
         )
         self.delete_preset_btn.grid(row=0, column=2, padx=(2, 0))
@@ -856,15 +917,16 @@ class MainWindow:
         # Read-only, not disabled: a disabled ttk.Entry cannot be selected
         # or copied, which defeats the purpose. `state="readonly"` still
         # gives the user normal text selection and Ctrl+C.
-        data_path_frame = ttk.LabelFrame(
-            frame, text="Your Data", padding="10"
-        )
-        data_path_frame.pack(fill=tk.X, padx=0, pady=(0, 10))
+        # A box around one line of text and one line of path. The
+        # border cost 10px of padding on every side and said nothing
+        # the text did not already say.
+        data_path_frame = ttk.Frame(frame)
+        data_path_frame.pack(fill=tk.X, padx=0, pady=(0, 8))
         ttk.Label(
             data_path_frame,
             text="Profiles and presets are saved here (Ctrl+C to copy):",
-            font=("", 9),
-        ).pack(anchor=tk.W, pady=(0, 3))
+            font=self._fonts[0],
+        ).pack(anchor=tk.W, pady=(0, 2))
         from pulsar.utils.paths import user_presets_dir
 
         # Resolved, not hard-coded to "~/.local/share" -- the whole point
@@ -889,9 +951,9 @@ class MainWindow:
         # the live widget rather than hard-coded to a colour that is
         # right on this theme and wrong on the next one.
         try:
-            path_bg = ttk.Style().lookup("TLabelframe.Label", "background")
+            path_bg = data_path_frame.cget("background")
             if not path_bg:
-                path_bg = data_path_frame.cget("background")
+                path_bg = ttk.Style().lookup("TLabelframe.Label", "background")
         except Exception:  # pragma: no cover - theme without the option
             path_bg = ""
         # ttk widgets take border and relief from the style, not from the
@@ -940,11 +1002,18 @@ class MainWindow:
 
         # Create unified tree view with columns for ID, type, and name only
         columns = ("id", "type", "name")
+        # Six rows, not the default ten. The tree was packed with
+        # expand=True and took every spare pixel, which pushed the
+        # button row and the whole Multi-output Routing panel below the
+        # fold -- the routing controls were invisible without
+        # scrolling. The tree still scrolls; it just no longer eats
+        # the panel.
         self.unified_tree = ttk.Treeview(
             tree_frame,
             columns=columns,
             show="tree headings",  # Show both tree and column headings
-            selectmode="browse"
+            selectmode="browse",
+            height=6,
         )
 
         # Define column headings
@@ -1049,14 +1118,17 @@ class MainWindow:
         # The outer wrapper existed because the single-output dropdown
         # shared the panel; with that gone, one panel does not need a
         # second frame around it.
-        self.multi_routing_frame = ttk.LabelFrame(
-            frame, text="Multi-output Routing"
-        )
+        self.multi_routing_frame = ttk.Frame(frame)
         self.multi_routing_frame.pack(
             fill=tk.X, pady=5
         )
         self.multi_routing_frame.columnconfigure(1, weight=1)
 
+        ttk.Label(
+            self.multi_routing_frame,
+            text="Multi-output Routing",
+            style="Pulsar.Section.TLabel",
+        ).pack(anchor=tk.W, pady=(0, 2))
         ttk.Label(
             self.multi_routing_frame,
             text=(
@@ -1065,8 +1137,8 @@ class MainWindow:
                 "have an active loopback."
             ),
             wraplength=600,
-            font=("", 9),
-        ).pack(anchor=tk.W, padx=5, pady=(5, 2))
+            font=self._fonts[0],
+        ).pack(anchor=tk.W, pady=(0, 2))
 
         # Listbox with multi-select via EXTENDED (Shift/Ctrl+click)
         listbox_frame = ttk.Frame(self.multi_routing_frame)
@@ -1122,9 +1194,18 @@ class MainWindow:
         # opening pavucontrol. This is the Phase 4 polish item that makes
         # Pulsar feel like a tool: one place to control your routing
         # topology AND its playback levels.
-        self.device_controls_frame = ttk.LabelFrame(
-            frame, text="Device Controls"
-        )
+        # A heading and flat content, like the routing panel above it.
+        # A frame here made a third box on a tab that already had
+        # one.
+        #
+        # The heading is a SIBLING of the frame, not a child: the
+        # builder lays its row out with grid(), and a parent cannot
+        # hold both a packed and a gridded child.
+        ttk.Label(
+            frame, text="Device Controls",
+            style="Pulsar.Section.TLabel",
+        ).pack(anchor=tk.W, padx=10, pady=(4, 0))
+        self.device_controls_frame = ttk.Frame(frame)
         self.device_controls_frame.pack(fill=tk.X, padx=10, pady=5)
         self._build_device_controls(self.device_controls_frame)
 
@@ -1530,28 +1611,7 @@ class MainWindow:
         # 9pt label is 9pt whatever the user's font is, so on a system
         # with a 16pt default these four widgets were the only thing
         # on the tab that stayed small.
-        named_font = tkfont.nametofont("TkDefaultFont")
-        # `actual("size")` is in POINTS. A copied font can carry a
-        # pixel size instead, and a style configured with one measured
-        # 12pt when the default was 16pt -- so the heading's size is
-        # set explicitly, in points.
-        #
-        # The derived fonts are made by COPYING the named font and
-        # then configuring the copy. `tkfont.Font(font=<a font>,
-        # weight="bold", size=10)` silently ignores the keyword
-        # arguments -- the new font just adopts the source font's
-        # weight and size -- so the heading came out neither bold nor
-        # any larger.
-        base_size = named_font.actual("size")
-        base_font = named_font
-        bold_font = named_font.copy()
-        bold_font.configure(weight="bold")
-        heading_font = named_font.copy()
-        heading_font.configure(weight="bold", size=base_size + 1)
-
-        style = ttk.Style()
-        style.configure("Pulsar.Primary.TButton", font=bold_font)
-        style.configure("Pulsar.Heading.TLabel", font=heading_font)
+        base_font, bold_font, heading_font = self._fonts[:3]
 
         # One line of orientation, not a paragraph.
         ttk.Label(
@@ -2461,14 +2521,16 @@ class MainWindow:
             ).pack(side=tk.LEFT, padx=(10, 0))
 
         # 1. Health Summary
-        health_frame = ttk.LabelFrame(
-            outer, text="Health Summary", padding="10"
-        )
+        health_frame = ttk.Frame(outer)
         health_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(
+            health_frame, text="Health Summary",
+            style="Pulsar.Section.TLabel",
+        ).pack(anchor=tk.W, pady=(0, 2))
         self.diag_health_var = tk.StringVar(value="(refresh to load)")
         self.diag_health_label = ttk.Label(
             health_frame, textvariable=self.diag_health_var,
-            font=("", 11, "bold"),
+            font=self._fonts[2],
         )
         self.diag_health_label.pack(anchor=tk.W)
         self.diag_warnings_var = tk.StringVar(value="")
@@ -2483,14 +2545,17 @@ class MainWindow:
         ).pack(anchor=tk.W)
 
         # 2. Sample Rate Audit
-        rate_frame = ttk.LabelFrame(
-            outer, text="Sample Rate Audit", padding="10"
-        )
+        # One line of text. It did not need a box around it.
+        rate_frame = ttk.Frame(outer)
         rate_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(
+            rate_frame, text="Sample Rate Audit",
+            style="Pulsar.Section.TLabel",
+        ).pack(anchor=tk.W, pady=(0, 2))
         self.diag_rate_var = tk.StringVar(value="(refresh to load)")
         ttk.Label(
             rate_frame, textvariable=self.diag_rate_var,
-            font=("", 10),
+            font=self._fonts[0],
         ).pack(anchor=tk.W)
 
         # 3. Graph Snapshot — pw-top-style table
@@ -2503,13 +2568,13 @@ class MainWindow:
         self.diag_counts_var = tk.StringVar(value="")
         ttk.Label(
             snapshot_frame, textvariable=self.diag_counts_var,
-            font=("", 10),
+            font=self._fonts[0],
         ).pack(anchor=tk.W, pady=(0, 5))
 
         # The node table (pw-top-style)
         ttk.Label(
             snapshot_frame, text="Audio Nodes:",
-            font=("", 10, "bold"),
+            style="Pulsar.Section.TLabel",
         ).pack(anchor=tk.W, pady=(5, 2))
 
         cols = ("id", "name", "class", "rate", "state", "app")
@@ -3261,11 +3326,14 @@ class MainWindow:
         )
 
         # Create hardware category groups directly at top level
+        # Plain text, no emoji. An emoji font is not always installed
+        # and Tk does not fall back to one, so the category names came
+        # out as a row of empty boxes on a system without it.
         category_names = {
-            'builtin': '🔌 Built-in Audio',
-            'usb': '🎧 USB Audio',
-            'bluetooth': '📡 Bluetooth Audio',
-            'hdmi': '📺 HDMI/DisplayPort'
+            'builtin': 'Built-in Audio',
+            'usb': 'USB Audio',
+            'bluetooth': 'Bluetooth Audio',
+            'hdmi': 'HDMI/DisplayPort'
         }
 
         for category, display_name in category_names.items():
@@ -3617,7 +3685,7 @@ class MainWindow:
         ttk.Label(
             parent,
             textvariable=self.device_controls_target_var,
-            font=("", 9, "italic"),
+            style="Pulsar.Italic.TLabel",
         ).grid(row=0, column=0, columnspan=4, sticky=tk.W, padx=5, pady=(5, 2))
 
         # Volume slider + percent label

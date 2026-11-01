@@ -81,9 +81,12 @@ time.sleep(0.5)
 root.update()
 shoot("99-app-audio-detail")
 
-print("exclusive button label:", app.capture_exclusive_button.cget("text"))
+# Only the widgets that still exist. `capture_exclusive_button` and
+# `capture_route_combo` were removed when the Capture tab was
+# reworked, and reading them raised AttributeError at the very end of
+# the run -- after every screenshot had been taken.
 print("route button label:    ", app.capture_route_button.cget("text"))
-print("combobox width:        ", app.capture_route_combo.cget("width"))
+print("route listbox height:  ", app.capture_route_listbox.cget("height"))
 
 root.destroy()
 print("done ->", outdir)

@@ -1,71 +1,52 @@
-# PulseAudio Control GUI - Source Code
+# Pulsar — source code
 
-This directory contains the source code for the PulseAudio Control GUI application.
-
-## Directory Structure
+The application source. Layout:
 
 ```
-src/
-├── __init__.py                 # Package initialization
-├── main.py                     # Application entry point
-├── config/                     # Configuration management
-│   └── __init__.py
-├── ui/                         # UI components
+src/pulsar/
+├── __init__.py
+├── __main__.py                # GUI entry point (`pulsar-gui`)
+├── cli.py                     # command-line interface (`pulsar`)
+├── ui/
 │   ├── __init__.py
-│   └── main_window.py          # Main application window implementation
-└── utils/                      # Utility functions
-    ├── __init__.py
-    └── pactl_runner.py         # PulseAudio command execution and parsing
+│   └── main_window.py         # the Tkinter application
+└── utils/                     # no Tkinter in here, ever
+    ├── device_names.py        # device-name parsing and classification
+    ├── pactl_runner.py        # the PulseAudio/PipeWire command layer
+    ├── paths.py               # XDG paths
+    ├── preset_manager.py      # saved presets
+    ├── profile_manager.py     # saved routing profiles
+    ├── pw_app_capture.py      # app-audio stream discovery (pw-dump)
+    ├── pw_app_route.py        # per-app routing (native PipeWire links)
+    └── pw_diagnostics.py      # Diagnostics tab graph snapshot
 ```
 
-## Main Components
+## The rule that shapes the layout
 
-### main.py
-Entry point for the application. Initializes the Tkinter root window and main application window.
+**`utils/` must not import Tkinter.** That is what makes it testable
+with no display and no audio server, which is where nearly all the
+logic lives. `ui/main_window.py` holds the widgets and the event
+handlers and delegates.
 
-### ui/main_window.py
-Implements the main application window and all UI components:
-- Tab-based interface (Create, Manage, Output)
-- Menu system
-- Status bar
-- Event handling
+So: new parsing and classification goes in `utils/`, not in `ui/`.
 
-### utils/pactl_runner.py
-Handles interaction with PulseAudio through `pactl` commands:
-- Running PulseAudio commands
-- Parsing output from commands
-- Managing audio devices and modules
+The two device classifiers are a known trap:
 
-## Running the Application
+- `utils/device_names.py` holds the name parsing behind
+  `MainWindow._extract_hardware_device_info_from_name`, which is a
+  thin delegate to `classify_device_name()`.
+- `MainWindow._detect_device_type` is the *other* classifier, and it
+  is still implemented in `ui/main_window.py` rather than `utils/`.
 
-From the project root directory:
-```bash
-python3 -m pulsar
-```
+The two used to disagree: a `bluez_output.<MAC>.1` name was
+classified as `builtin` by one and `bluetooth` by the other. Check
+which side you are editing before assuming both delegate to
+`utils/`.
 
-## Contributing
+## Testing a UI method without a display
 
-When adding new features:
-1. Add utility functions to the appropriate modules
-2. Update UI components in main_window.py
-3. Document any changes or new features 
-
-## Module boundaries
-
-`utils/` holds logic that does not touch Tkinter and can therefore be unit
-tested with no display and no audio server. `utils/device_names.py` in
-particular holds the device-name parsing and classification behind
-`MainWindow._extract_hardware_device_info_from_name`, which is a thin
-delegate to its `classify_device_name()`.
-
-`MainWindow._detect_device_type` is the *other* classifier, and as of this
-commit it is still implemented in `ui/main_window.py` rather than `utils/`.
-The two used to disagree: a `bluez_output.<MAC>.1` name was classified as
-`builtin` by one and `bluetooth` by the other. Check which side you are
-editing before assuming both delegate here.
-
-Pure methods on a class that need no widget state can still be tested without
-a display:
+Pure methods on a class that need no widget state can still be tested
+without a display:
 
 ```python
 import ui.main_window as mw
@@ -73,9 +54,26 @@ bare = object.__new__(mw.MainWindow)   # skips __init__, no root, no widgets
 ```
 
 That snippet needs `src/` on the import path — either run under
-`PYTHONPATH=src` or install the package first with `./install.sh` (which
-installs it in editable mode, pointing at `src/`). Nothing in the module
-imports Tk at call time, so a bare instance is enough to exercise the
-methods.
+`PYTHONPATH=src` or install the package first with `./install.sh`
+(which installs it in editable mode, pointing at `src/`). Nothing in
+the module imports Tk at call time, so a bare instance is enough to
+exercise the methods.
 
-Keep new parsing and classification logic in `utils/`, not in `ui/`. 
+Two things that bite when testing with real Tk widgets instead:
+
+- Tk does not deliver `<<ListboxSelect>>` to an **unmapped** widget,
+  and a programmatic `selection_set()` does not fire it at all.
+- A modal `messagebox` **blocks forever** under Xvfb.
+
+Both are covered in [AGENTS.md](../AGENTS.md), along with the coding
+policy — validation at the boundary, error handling, and the traps
+specific to driving an audio server.
+
+## Running the application
+
+From the project root directory:
+
+```bash
+python3 -m pulsar        # the GUI
+pulsar                   # the CLI, once installed
+```

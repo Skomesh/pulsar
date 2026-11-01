@@ -13,6 +13,9 @@ Pulsar is a fork of [pactl-gui](https://github.com/Skrappjaw/pactl-gui) by Skrap
 
 - **Sink / Source / Both (duplex)** choice at device creation time
 - **Loopback routing** — wire virtual devices to your real output with one click
+- **Per-app routing** — send one application to one *or more* outputs, and to
+  nowhere else. Routing an app never disturbs another app, even when they
+  share a device.
 - **Profile persistence** — save and reload complete routing topologies
 - **Streamer-oriented defaults** — opinionated presets for game + voice + music + mic
 
@@ -26,16 +29,35 @@ Early development. Currently inheriting pactl-gui's MVP feature set; Pulsar-spec
 - Python 3.6+
 - Tkinter
 - The `pactl` command-line utility
+- The `pw-dump` command-line utility, for app-audio discovery and the
+  Diagnostics tab
+
+`pw-dump` is a hard requirement for those two features, and every
+package format already depends on it. It is listed separately because
+the two tools live in different packages on different distributions, and
+because it is the one that is easy to miss when installing from source
+— without it the Capture tab has nothing to show and says so.
+
+The package names differ per distribution, and `pactl` and `pw-dump` are
+usually *not* in the same one:
+
+| tool | Debian/Ubuntu | Fedora | Arch |
+|---|---|---|---|
+| `pactl` | `pulseaudio-utils` | `pulseaudio-utils` | `libpulse` |
+| `pw-dump` | `pipewire-bin` | `pipewire-utils` | `pipewire` |
+
+Per-app routing also uses `pw-link`, which lives in the **same package**
+as `pw-dump` on every distribution — so it adds no extra dependency.
 
 ```bash
 # Debian/Ubuntu
-sudo apt-get install python3-tk pulseaudio-utils
+sudo apt-get install python3-tk pulseaudio-utils pipewire-bin
 
 # Fedora
-sudo dnf install python3-tkinter pulseaudio-utils
+sudo dnf install python3-tkinter pulseaudio-utils pipewire-utils
 
 # Arch
-sudo pacman -S tk pulseaudio
+sudo pacman -S tk libpulse pipewire
 ```
 
 ## Installation

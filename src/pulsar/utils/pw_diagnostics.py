@@ -34,9 +34,27 @@ import shutil
 import subprocess
 from typing import Any, Dict, List, Optional
 
+#: The package that provides the pw-* tools, per distribution.
+#:
+#: There is no single name that is right everywhere, and "pipewire-tools"
+#: is right on NONE of them -- it does not exist on Debian/Ubuntu, Fedora
+#: or Arch. The app already depends on this package in every format it
+#: ships (debian/control: pipewire-bin, pulsar.spec: pipewire-utils,
+#: snap: pipewire-bin), so the names below are not a guess.
+#:
+#: Verified on Debian/Ubuntu: `dpkg -S $(command -v pw-dump)` ->
+#: pipewire-bin, and `dpkg -S $(command -v pactl)` -> pulseaudio-utils.
+PIPEWIRE_TOOLS_HINT = (
+    "install the pipewire tools for your distribution "
+    "(Debian/Ubuntu: pipewire-bin, Fedora: pipewire-utils, Arch: pipewire)"
+)
+
 
 def pw_dump_available() -> bool:
-    """True if pw-dump is installed (part of pipewire-tools)."""
+    """True if pw-dump is installed.
+
+    See PIPEWIRE_TOOLS_HINT for the per-distribution package names.
+    """
     return shutil.which("pw-dump") is not None
 
 
@@ -50,7 +68,9 @@ def _run_pw_dump(timeout: float = 5.0) -> List[Dict[str, Any]]:
     Raises PwDumpError on missing tool, timeout, or invalid output.
     """
     if not pw_dump_available():
-        raise PwDumpError("pw-dump not found on PATH. Install pipewire-tools.")
+        raise PwDumpError(
+            f"pw-dump not found on PATH. {PIPEWIRE_TOOLS_HINT}."
+        )
     try:
         proc = subprocess.run(
             ["pw-dump"],
@@ -127,10 +147,6 @@ def get_graph_snapshot(timeout: float = 5.0) -> Dict[str, Any]:
             f"pw-dump returned unexpected type {type(data).__name__}"
         )
 
-    # Build lookup tables
-    nodes_by_id: Dict[int, Dict[str, Any]] = {}
-    clients_by_id: Dict[int, Dict[str, Any]] = {}
-
     snapshot: Dict[str, Any] = {
         "core": {},
         "clients": [],
@@ -170,7 +186,6 @@ def get_graph_snapshot(timeout: float = 5.0) -> Dict[str, Any]:
                 "props": props,
             }
             snapshot["clients"].append(entry)
-            clients_by_id[oid] = entry
 
         elif otype == "PipeWire:Interface:Module":
             # Module args can be either an actual argument string (e.g.
@@ -210,7 +225,6 @@ def get_graph_snapshot(timeout: float = 5.0) -> Dict[str, Any]:
                 "props": props,
             }
             snapshot["nodes"].append(entry)
-            nodes_by_id[oid] = entry
 
         elif otype == "PipeWire:Interface:Device":
             entry = {
@@ -354,14 +368,13 @@ def health_summary(snapshot: Dict[str, Any]) -> Dict[str, Any]:
 
     # Check for suspended audio nodes (not necessarily wrong — could
     # be idle — but worth flagging if many)
-    suspended_audio = [
-        n for n in nodes
-        if n.get("media_class", "").startswith("Audio/")
-        and n.get("state") == "suspended"
+    audio_nodes = [
+        n for n in nodes if n.get("media_class", "").startswith("Audio/")
     ]
-    if len(suspended_audio) > len(nodes) / 2 and nodes:
+    suspended_audio = [n for n in audio_nodes if n.get("state") == "suspended"]
+    if audio_nodes and len(suspended_audio) > len(audio_nodes) / 2:
         warnings.append(
-            f"{len(suspended_audio)} of {len(nodes)} audio nodes are suspended "
+            f"{len(suspended_audio)} of {len(audio_nodes)} audio nodes are suspended "
             "(idle but available; not necessarily a problem)"
         )
 

@@ -17,6 +17,7 @@ from contextlib import ExitStack
 from unittest import mock
 
 from pulsar.ui.main_window import MainWindow
+from pulsar.utils import pw_app_route
 from pulsar.utils.pactl_runner import PactlRunner
 
 # Real output from `pactl list sink-inputs` on PipeWire, trimmed. Note there
@@ -31,6 +32,7 @@ SINK_INPUTS_OUTPUT = """Sink Input #2507
 \tCorked: no
 \tMute: no
 \tProperties:
+\t\tobject.id = "63"
 \t\tapplication.name = "pw-play"
 \t\tnode.name = "pw-play"
 \t\tmedia.name = "/tmp/tone.wav"
@@ -39,6 +41,7 @@ Sink Input #2519
 \tDriver: PipeWire
 \tSink: 2443
 \tProperties:
+\t\tobject.id = "64"
 \t\tapplication.name = "firefox"
 \t\tnode.name = "Firefox"
 \t\tmedia.name = "Sound in Firefox"
@@ -90,9 +93,9 @@ class FakeTree:
         return 0
 
 
-def make_stream_node(node_name="pw-play", app="pw-play"):
+def make_stream_node(node_id=63, node_name="pw-play", app="pw-play"):
     return {
-        "id": 63,
+        "id": node_id,
         "application_name": app,
         "media_class": "Stream/Output/Audio",
         "node_name": node_name,
@@ -101,17 +104,44 @@ def make_stream_node(node_name="pw-play", app="pw-play"):
     }
 
 
+class FakeListbox:
+    """A multi-select listbox stub."""
+
+    def __init__(self, items=(), selected=()):
+        self._items = list(items)
+        self._selected = tuple(selected)
+
+    def curselection(self):
+        return self._selected
+
+    def get(self, index):
+        return self._items[index]
+
+    def size(self):
+        return len(self._items)
+
+    def delete(self, *a):
+        self._items = []
+
+    def insert(self, _end, item):
+        self._items.append(item)
+
+    def selection_set(self, *a):
+        pass
+
+
 def make_window(node=None, target="alsa_output.pci-Built-in"):
     node = node if node is not None else make_stream_node()
     win = object.__new__(MainWindow)
     win._capture_nodes = [node]
-    win.capture_route_var = FakeStringVar(target)
     win.capture_selected_var = FakeStringVar("")
     win.capture_route_button = FakeButton()
-    win.capture_exclusive_button = FakeButton()
     win.status_var = FakeStringVar("")
     win.add_output = mock.Mock()
     win._refresh_capture_tree = mock.Mock()
+    win.capture_route_listbox = FakeListbox(
+        items=[target], selected=(0,)
+    )
     win.capture_tree = FakeTree(
         (node["id"], f"{node['application_name']} (pid ?)",
          node["media_class"], node["node_name"])
@@ -143,6 +173,18 @@ class TestListSinkInputsParsing(unittest.TestCase):
         self.assertEqual(self._run()[0]["node_name"], "pw-play")
         self.assertEqual(self._run()[1]["node_name"], "Firefox")
 
+    def test_extracts_the_pipewire_node_id(self):
+        """object.id IS the PipeWire node id, 1:1.
+
+        This is the key that joins the two views of the same stream: the
+        discovery side reports a PipeWire node id, and this side reports
+        the same id as object.id. Matching on it is exact, so two
+        instances of one application can be told apart -- which matching
+        on node.name cannot do, because they share a node.name.
+        """
+        self.assertEqual(self._run()[0]["node_id"], "63")
+        self.assertEqual(self._run()[1]["node_id"], "64")
+
     def test_resolves_sink_index_to_sink_name(self):
         """A bare sink index is not actionable; callers need the name."""
         first = self._run()[0]
@@ -168,40 +210,6 @@ class TestListSinkInputsParsing(unittest.TestCase):
         self.assertEqual(entries[0]["sink_index"], "2425")
 
 
-class TestSinkInputsForNode(unittest.TestCase):
-    """Matching a discovery row to a sink input."""
-
-    def setUp(self):
-        self.streams = [
-            {"index": "1", "node_name": "pw-play", "application": "pw-play"},
-            {"index": "2", "node_name": "Firefox", "application": "firefox"},
-        ]
-
-    def test_matches_on_node_name(self):
-        got = PactlRunner.sink_inputs_for_node(self.streams, "pw-play")
-        self.assertEqual([s["index"] for s in got], ["1"])
-
-    def test_falls_back_to_application_name(self):
-        """Apps that set application.name but not node.name still match."""
-        streams = [{"index": "9", "node_name": "", "application": "discord"}]
-        got = PactlRunner.sink_inputs_for_node(streams, "discord")
-        self.assertEqual([s["index"] for s in got], ["9"])
-
-    def test_no_match_returns_empty(self):
-        self.assertEqual(PactlRunner.sink_inputs_for_node(self.streams, "spotify"), [])
-
-    def test_empty_node_name_matches_nothing(self):
-        """A blank key must not match every stream."""
-        self.assertEqual(PactlRunner.sink_inputs_for_node(self.streams, ""), [])
-
-    def test_returns_all_matches_so_caller_can_disambiguate(self):
-        streams = [
-            {"index": "1", "node_name": "app", "application": "app"},
-            {"index": "2", "node_name": "app", "application": "app"},
-        ]
-        self.assertEqual(len(PactlRunner.sink_inputs_for_node(streams, "app")), 2)
-
-
 class TestMoveSinkInput(unittest.TestCase):
     def test_calls_pactl_with_index_and_name(self):
         with mock.patch.object(PactlRunner, "run_command", return_value=("", 0)) as run:
@@ -217,12 +225,12 @@ class TestMoveSinkInput(unittest.TestCase):
 
 
 class _PactlPatch:
-    """Started mocks for the three pactl calls the handler makes."""
+    """Started mocks for the pactl calls the handler makes."""
 
     def __init__(self, move_ok=True, streams=None):
         self.streams = streams if streams is not None else [
-            {"index": "2507", "application": "pw-play", "node_name": "pw-play",
-             "media": "x", "sink_index": "2425",
+            {"index": "2507", "node_id": "63", "application": "pw-play",
+             "node_name": "pw-play", "media": "x", "sink_index": "2425",
              "sink": "alsa_output.usb-Headphones"},
         ]
         self.stack = ExitStack()
@@ -243,6 +251,30 @@ class _PactlPatch:
         )
 
     def __enter__(self):
+        # The handler refuses to route when the PipeWire tools are
+        # missing. CI hides pw-dump, so without this the handler would
+        # take the "not installed" branch and never reach the routing
+        # logic these tests are about.
+        self.stack.enter_context(mock.patch.object(
+            pw_app_route, "pw_link_available", return_value=True
+        ))
+        # The handler checks that the audio server answers before it
+        # believes the output list; the real check runs `pactl info`,
+        # which fails under the CI simulation.
+        self.stack.enter_context(mock.patch.object(
+            PactlRunner, "server_reachable", return_value=True
+        ))
+        # Reading the graph (pw-dump) and the live link list (pw-link)
+        # must not shell out here: a CI runner has neither tool
+        # installed, so a real call would raise and the handler would
+        # never reach the routing logic.
+        self.stack.enter_context(mock.patch.object(
+            pw_app_route, "_run_pw_dump", return_value="[]"
+        ))
+        self.stack.enter_context(mock.patch.object(
+            pw_app_route, "_run_pw_link",
+            return_value=mock.Mock(stdout="", stderr="", returncode=0),
+        ))
         return self
 
     def __exit__(self, *exc):
@@ -250,28 +282,43 @@ class _PactlPatch:
         return False
 
 
-class TestExclusiveClickHandler(unittest.TestCase):
-    """The handler, with pactl mocked."""
+class TestRoutingDoesNotTouchOtherApps(unittest.TestCase):
+    """The regression this file exists for: routing one app must not
+    disturb another app's audio.
+
+    The handler moved from `_on_capture_exclusive_clicked` to
+    `_on_capture_route_to_outputs_clicked` when per-app routing became
+    native and gained multi-target support. The contract is unchanged:
+    the app that was selected is the app that moves, and no other.
+    """
 
     def _click(self, win, **kwargs):
         with _PactlPatch(**kwargs) as p:
-            win._on_capture_exclusive_clicked()
+            captured = {}
+
+            def fake_apply(plan, logger=None, move=None):
+                captured["move"] = move
+                # The real apply_plan calls move between the removals
+                # and the creations. A stand-in that does not leaves
+                # the handler unable to tell an accepted move from a
+                # refused one, so the refusal test passed either way.
+                if move is not None and plan.primary:
+                    move(plan.primary)
+                return (0, 0)
+
+            with mock.patch(
+                "pulsar.ui.main_window.pw_app_route.plan_route"
+            ) as plan:
+                plan.return_value = mock.Mock(
+                    primary="alsa_output.pci-Built-in", create=[],
+                    remove=[], needs_move=True,
+                )
+                with mock.patch(
+                    "pulsar.ui.main_window.pw_app_route.apply_plan",
+                    side_effect=fake_apply,
+                ):
+                    win._on_capture_route_to_outputs_clicked()
             return p.move, p.msgbox
-
-    def test_moves_the_matching_stream(self):
-        win = make_window()
-        move, mb = self._click(win)
-        move.assert_called_once()
-        args = move.call_args[0]
-        self.assertEqual(args[0], "2507")
-        self.assertEqual(args[1], "alsa_output.pci-Built-in")
-
-    def test_no_loopback_is_created(self):
-        """Exclusive routing must not ALSO leave a loopback behind."""
-        win = make_window()
-        with mock.patch.object(PactlRunner, "create_loopback") as lb:
-            self._click(win)
-        lb.assert_not_called()
 
     def test_does_not_move_another_apps_stream(self):
         """The regression this pinning exists for: pick the wrong stream.
@@ -280,97 +327,79 @@ class TestExclusiveClickHandler(unittest.TestCase):
         and leave pw-play's alone.
         """
         streams = [
-            {"index": "2507", "application": "pw-play", "node_name": "pw-play",
-             "sink": "speakers", "sink_index": "1"},
-            {"index": "2519", "application": "firefox", "node_name": "Firefox",
-             "sink": "speakers", "sink_index": "1"},
+            {"index": "2507", "node_id": "63", "application": "pw-play",
+             "node_name": "pw-play", "sink": "speakers", "sink_index": "1"},
+            {"index": "2519", "node_id": "64", "application": "firefox",
+             "node_name": "Firefox", "sink": "speakers", "sink_index": "1"},
         ]
-        win = make_window(node=make_stream_node(node_name="Firefox", app="firefox"))
+        win = make_window(node=make_stream_node(node_id=64, node_name="Firefox",
+                                                app="firefox"))
         move, _ = self._click(win, streams=streams)
         move.assert_called_once()
         self.assertEqual(move.call_args[0][0], "2519", "must move Firefox's index")
 
-    def test_refuses_rather_than_guessing_when_named_app_absent(self):
+    def test_two_instances_of_one_app_are_distinguished_by_node_id(self):
+        """Two instances share a node.name, so the node id is the key.
+
+        The old handler matched on node.name and had to REFUSE when two
+        streams matched. The node id is exact, so the right one can be
+        picked instead of giving up.
+        """
+        dupes = [
+            {"index": "1", "node_id": "63", "node_name": "pw-play",
+             "application": "pw-play", "sink": "a", "sink_index": "1"},
+            {"index": "2", "node_id": "64", "node_name": "pw-play",
+             "application": "pw-play", "sink": "b", "sink_index": "2"},
+        ]
+        win = make_window(node=make_stream_node(node_id=64))
+        move, _ = self._click(win, streams=dupes)
+        move.assert_called_once()
+        self.assertEqual(move.call_args[0][0], "2",
+                         "must move the stream with the matching node id")
+
+    def test_refuses_rather_than_guessing_when_the_app_is_absent(self):
         """If the selected app has no live stream, move nothing at all."""
-        win = make_window(node=make_stream_node(node_name="Firefox", app="firefox"))
+        win = make_window(node=make_stream_node(node_id=99))
         move, mb = self._click(win)  # only a pw-play stream exists
         move.assert_not_called()
-        self.assertTrue(mb.showerror.called)
+        self.assertIn(
+            "No playing stream found",
+            mb.showerror.call_args[0][1],
+        )
 
-    def test_strips_virtual_marker_from_target(self):
-        win = make_window(target="alsa_output.pci-Built-in  [virtual]")
-        move, _ = self._click(win)
-        self.assertEqual(move.call_args[0][1], "alsa_output.pci-Built-in")
+    def test_no_loopback_is_created(self):
+        """Routing an app must not ALSO leave a sink-level loopback.
 
-    def test_refuses_when_target_no_longer_exists(self):
-        win = make_window(target="unplugged_headphones")
-        move, mb = self._click(win)
-        move.assert_not_called()
-        self.assertTrue(mb.showerror.called)
-
-    def test_ambiguous_streams_are_refused_not_guessed(self):
-        """Two matching streams: refuse rather than move an arbitrary one."""
-        dupes = [
-            {"index": "1", "node_name": "pw-play", "application": "pw-play",
-             "sink": "a", "sink_index": "1"},
-            {"index": "2", "node_name": "pw-play", "application": "pw-play",
-             "sink": "b", "sink_index": "2"},
-        ]
+        A loopback belongs to a SINK, not to an app, so one left behind
+        would carry other apps' audio too -- the defect this replaces.
+        """
         win = make_window()
-        move, mb = self._click(win, streams=dupes)
-        move.assert_not_called()
-        self.assertTrue(mb.showerror.called)
-
-    def test_no_matching_stream_is_reported(self):
-        win = make_window()
-        move, mb = self._click(win, streams=[])
-        move.assert_not_called()
-        self.assertTrue(mb.showerror.called)
-
-    def test_no_selection_is_reported(self):
-        win = make_window()
-        win.capture_tree.selection = lambda: ()
-        move, mb = self._click(win)
-        move.assert_not_called()
-        self.assertTrue(mb.showinfo.called)
+        with mock.patch.object(PactlRunner, "create_loopback") as lb:
+            self._click(win)
+        lb.assert_not_called()
 
     def test_server_refusal_is_surfaced(self):
+        """The server refused the move -- say so.
+
+        The mocked apply_plan now calls the move callback, so this
+        only passes when the server really did refuse. It used to
+        pass either way, because the handler showed the error
+        unconditionally.
+        """
         win = make_window()
         move, mb = self._click(win, move_ok=False)
-        self.assertTrue(mb.showerror.called)
-
-    def test_already_on_target_is_a_noop(self):
-        streams = [
-            {"index": "2507", "application": "pw-play", "node_name": "pw-play",
-             "sink": "alsa_output.pci-Built-in", "sink_index": "2443"},
-        ]
-        win = make_window(target="alsa_output.pci-Built-in")
-        move, mb = self._click(win, streams=streams)
-        move.assert_not_called()
-
-
-class TestButtonEnablement(unittest.TestCase):
-    """The exclusive button follows the same rules as Route Here."""
-
-    def _select(self, cls):
-        win = make_window()
-        win.capture_tree._values = (63, "app (pid ?)", cls, "node")
-        win._on_capture_tree_select()
-        return win.capture_exclusive_button.configs[-1].get("state")
-
-    def test_enabled_for_output_stream(self):
-        self.assertEqual(self._select("Stream/Output/Audio"), "normal")
-
-    def test_disabled_for_input_stream(self):
-        self.assertEqual(self._select("Stream/Input/Audio"), "disabled")
-
-    def test_disabled_with_no_selection(self):
-        win = make_window()
-        win.capture_tree.selection = lambda: ()
-        win._on_capture_tree_select()
-        self.assertEqual(
-            win.capture_exclusive_button.configs[-1].get("state"), "disabled"
+        move.assert_called_once()
+        self.assertIn(
+            "refused to move",
+            mb.showerror.call_args[0][1],
         )
+
+    def test_a_server_that_accepts_the_move_is_not_reported_as_a_refusal(self):
+        """The other half of the contract."""
+        win = make_window()
+        move, mb = self._click(win, move_ok=True)
+        move.assert_called_once()
+        mb.showerror.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -101,20 +101,24 @@ override_dh_auto_install:
 	# resolves to $XDG_DATA_HOME/pulsar/presets, i.e. ~/.local/share on a
 	# default install -- see src/pulsar/utils/paths.py. Installing a presets
 	# directory into /usr would give the package a path the application never
-	# reads, and would tempt someone into making it writable, which would
-	# then break every future release's ability to ship new built-in presets.
-	# The built-in profiles ship inside the wheel as package data
-	# (pulsar/utils/presets/builtin_profiles.json) and are read-only.
+	# reads. The package ships no data files at all: the profile list is
+	# only what the user saved.
 	# NOT `> debian/pulsar/usr/share/applications/pulsar.desktop`: nothing
 	# creates that directory. There is no debian/pulsar.install or .dirs,
 	# and the wheel ships no desktop file, so dh_python3 never makes it.
 	# A bare redirect fails with ENOENT and aborts make -- no .deb at all.
 	# `install -D` below creates parents, which is why the icon and doc
 	# installs work and this one did not.
+	# A private temp file, not a fixed path in /tmp. dpkg-buildpackage
+	# runs with elevated privileges, and a world-writable /tmp path is
+	# a symlink target: anything that pre-created /tmp/pulsar.desktop
+	# as a symlink would have the build write through it.
+	desktop_tmp=$$(mktemp) && \
 	sed -e 's|PLACEHOLDER_EXEC_PATH|/usr/bin/pulsar-gui|g' pulsar.desktop \
-		> /tmp/pulsar.desktop
-	install -D -m 0644 /tmp/pulsar.desktop \
-		debian/pulsar/usr/share/applications/pulsar.desktop
+		> "$$desktop_tmp" && \
+	install -D -m 0644 "$$desktop_tmp" \
+		debian/pulsar/usr/share/applications/pulsar.desktop; \
+	rm -f "$$desktop_tmp"
 	# Install the README next to the manual page-less binary so the
 	# documentation the .deb ships is the one upstream wrote.
 	install -D -m 0644 README.md debian/pulsar/usr/share/doc/pulsar/README.md

@@ -16,6 +16,7 @@ from pulsar.utils.pw_app_capture import (
     SOURCE_TYPE_WINDOW,
     PortalCapture,
     PortalCaptureError,
+    PwDumpUnavailable,
     PwRecordError,
     _parse_object_path,
     discover_app_audio_nodes,
@@ -148,9 +149,15 @@ class TestPortalCapture(unittest.TestCase):
             for c in mock_run.call_args_list
             if c.args and isinstance(c.args[0], list)
         ]
+        # Search the whole argv. The method name is at index 7
+        # (gdbus call --session --dest D --object-path P --method M),
+        # so index 5 is the literal "--object-path" and the old
+        # assertion could never fire: it passed even when
+        # create_session really did call CreateSession.
         create_session_called = any(
-            "CreateSession" in (cmd[5] if len(cmd) > 5 else "")
+            "CreateSession" in part
             for cmd in called_methods
+            for part in cmd
         )
         self.assertFalse(
             create_session_called,
@@ -183,9 +190,13 @@ class TestPortalCapture(unittest.TestCase):
             pc.start()
 
 
-@unittest.skipUnless(
-    pactl_or_pw_dump_available(), "pw-dump not available"
-)
+# No skip guard. Every test in this class mocks
+# `pulsar.utils.pw_app_capture._run_pw_dump` and feeds it synthetic
+# JSON, so none of them needs the pw-dump binary. The class-level
+# `skipUnless` keyed on that binary anyway, so on a CI runner without
+# pipewire-utils -- exactly the environment run_ci_equivalent.sh
+# simulates -- the whole class vanished from the run and the
+# app-discovery filter logic was never checked there.
 class TestDiscoverAppAudioNodes(unittest.TestCase):
     """Filter logic on a synthetic pw-dump JSON."""
 
@@ -203,8 +214,32 @@ class TestDiscoverAppAudioNodes(unittest.TestCase):
         ]
 
     @mock.patch("pulsar.utils.pw_app_capture._run_pw_dump")
-    def test_returns_empty_when_no_pw_dump(self, mock_run):
-        mock_run.return_value = None
+    def test_raises_when_pw_dump_cannot_be_run(self, mock_run):
+        """The contract changed: an unavailable tool is not an empty result.
+
+        This test used to assert that a failed pw-dump produced an empty
+        list. That contract was the defect: the Capture tab could not
+        tell "the tool that finds apps is missing" apart from "no app is
+        playing audio", and showed the user the second message when the
+        first was true -- sending them off to start an app that was
+        already playing, with no explanation.
+
+        The empty-list contract is now reserved for the case it actually
+        describes: pw-dump ran and found nothing. That is asserted
+        separately below.
+        """
+        mock_run.side_effect = PwDumpUnavailable()
+        with self.assertRaises(PwDumpUnavailable):
+            discover_app_audio_nodes()
+
+    @mock.patch("pulsar.utils.pw_app_capture._run_pw_dump")
+    def test_returns_empty_when_pw_dump_finds_no_streams(self, mock_run):
+        """pw-dump ran, looked, and found nothing. That IS an empty list.
+
+        The distinction from the case above is the whole point: the
+        user is told nothing is playing, which is true.
+        """
+        mock_run.return_value = self._fake_pw_dump([])
         self.assertEqual(discover_app_audio_nodes(), [])
 
     @mock.patch("pulsar.utils.pw_app_capture._run_pw_dump")
@@ -377,6 +412,42 @@ class TestDiscoverAppAudioNodes(unittest.TestCase):
         result = discover_app_audio_nodes()
         self.assertEqual(len(result), 1)
         self.assertIsNone(result[0]["sink_name"])
+
+    @mock.patch("pulsar.utils.pw_app_capture._run_pw_dump")
+    def test_every_sink_a_stream_reaches_is_reported(self, mock_run):
+        """An app routed to several outputs reaches several sinks.
+
+        Per-app routing to more than one output is a supported feature,
+        so the discovery must not report only the first sink. It used
+        to: the first link per node won, and the rest were dropped.
+        """
+        mock_run.return_value = [
+            {"type": "PipeWire:Interface:Node", "id": 113,
+             "info": {"props": {"node.name": "App",
+                                "media.class": "Stream/Output/Audio",
+                                "application.name": "App",
+                                "application.process.binary": "app",
+                                "application.process.id": "1"}}},
+            {"type": "PipeWire:Interface:Node", "id": 79,
+             "info": {"props": {"node.name": "sink_a"}}},
+            {"type": "PipeWire:Interface:Node", "id": 80,
+             "info": {"props": {"node.name": "sink_b"}}},
+            # The app reaches BOTH sinks.
+            {"type": "PipeWire:Interface:Link", "id": 241,
+             "info": {"output-node-id": 113, "input-node-id": 79}},
+            {"type": "PipeWire:Interface:Link", "id": 242,
+             "info": {"output-node-id": 113, "input-node-id": 80}},
+        ]
+        result = discover_app_audio_nodes()
+        self.assertEqual(len(result), 1)
+        self.assertEqual(
+            sorted(result[0]["sink_names"]), ["sink_a", "sink_b"],
+            "every sink the stream reaches must be reported",
+        )
+        self.assertIn(
+            result[0]["sink_name"], ("sink_a", "sink_b"),
+            "sink_name must still name one of them",
+        )
 
 
 class TestPwRecord(unittest.TestCase):

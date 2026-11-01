@@ -53,7 +53,95 @@ class CliTestBase(unittest.TestCase):
         Patching only the methods that touch the outside world is both more
         faithful and less surprising.
         """
+        # The list commands check that the audio server answers before
+        # listing anything, so a test that stubs `list_sinks` but not
+        # `server_reachable` used the real one -- which fails under the
+        # CI simulation, where pactl is absent, and turned every list
+        # test into "no audio server" instead of a listing.
+        # Default to a reachable server; a test that wants the other
+        # passes server_reachable=False.
+        methods.setdefault(
+            "server_reachable", mock.Mock(return_value=True)
+        )
         return mock.patch.multiple(cli.PactlRunner, **methods)
+
+
+class TestListCommandsReportAnUnreachableServer(CliTestBase):
+    """A list command must not report success when the server is gone.
+
+    Every list_* method returns an empty list when pactl fails. That
+    is right for the GUI -- there is nothing to show -- but the CLI is
+    for scripting, and `pulsar list sinks --json` printing
+    {"count": 0, "sinks": []} and exiting 0 was byte-identical to a
+    system that genuinely has no sinks. A script could not tell a
+    broken server from an empty one, and would act on the difference
+    without knowing it was there.
+
+    The GUI's behaviour is unchanged: only the CLI reports the
+    failure.
+    """
+
+    LIST_COMMANDS = (
+        ("list", "sinks"),
+        ("list", "sources"),
+        ("list", "cards"),
+        ("list", "streams"),
+        ("list", "routes"),
+    )
+
+    def _unreachable(self):
+        """Patch the runner so the server cannot be reached."""
+        return self.patch_runner(
+            list_sinks=mock.Mock(return_value=[]),
+            list_sources=mock.Mock(return_value=[]),
+            list_cards=mock.Mock(return_value=[]),
+            list_sink_inputs=mock.Mock(return_value=[]),
+            list_loopbacks=mock.Mock(return_value=[]),
+            server_reachable=mock.Mock(return_value=False),
+        )
+
+    def test_each_list_command_fails_when_the_server_is_unreachable(self):
+        for argv in self.LIST_COMMANDS:
+            with self.subTest(command=" ".join(argv)):
+                with self._unreachable():
+                    code, out, err = self.run_cli(*argv)
+                self.assertEqual(
+                    code, EXIT_ERROR,
+                    f"{' '.join(argv)} reported success with no server",
+                )
+                self.assertIn(
+                    "audio server", err.lower(),
+                    f"{' '.join(argv)} did not say what was wrong: {err!r}",
+                )
+
+    def test_each_list_command_fails_in_json_mode_too(self):
+        for argv in self.LIST_COMMANDS:
+            with self.subTest(command=" ".join(argv)):
+                with self._unreachable():
+                    code, out, err = self.run_cli("--json", *argv)
+                self.assertEqual(code, EXIT_ERROR)
+                self.assertNotIn(
+                    '"sinks"', out,
+                    "JSON mode must not emit a successful empty listing",
+                )
+
+    def test_a_reachable_server_with_no_devices_still_succeeds(self):
+        """No devices is a real answer, not a failure.
+
+        The distinction is the whole point: the same empty list has to
+        mean different things depending on whether the server answered.
+        """
+        with self.patch_runner(
+            list_sinks=mock.Mock(return_value=[]),
+            list_sources=mock.Mock(return_value=[]),
+            list_cards=mock.Mock(return_value=[]),
+            list_sink_inputs=mock.Mock(return_value=[]),
+            list_loopbacks=mock.Mock(return_value=[]),
+            server_reachable=mock.Mock(return_value=True),
+        ):
+            code, out, err = self.run_cli("list", "sinks")
+        self.assertEqual(code, 0, err)
+        self.assertIn("No sinks found.", out)
 
 
 class TestListSinks(CliTestBase):
@@ -430,13 +518,30 @@ class TestListSources(CliTestBase):
 
 
 class TestListCards(CliTestBase):
-    # Real key set from _parse_card_profile_line.
+    # The REAL key set from PactlRunner.list_cards. A card has
+    # name/driver/active_profile/description/profiles, and the sink and
+    # source counts live inside each PROFILE. The old fixture put them
+    # at the top level, which list_cards never produces -- so the CLI
+    # read keys that were never there and every card rendered 0 and 0.
     CARDS = [
         {
-            "name": "alsa_card.pci", "description": "Built-in Audio",
-            "sinks": 1, "sources": 1, "priority": 3,
-            "available": [
-                {"name": "output:analog-stereo", "description": "Analog Stereo Output"},
+            "name": "alsa_card.pci",
+            "driver": "alsa",
+            "active_profile": "output:analog-stereo",
+            "description": "Built-in Audio",
+            "profiles": [
+                {
+                    "name": "output:analog-stereo",
+                    "description": "Analog Stereo Output",
+                    "sinks": 1, "sources": 1, "priority": 3,
+                    "available": True,
+                },
+                {
+                    "name": "output:stereo",
+                    "description": "Stereo Output",
+                    "sinks": 1, "sources": 0, "priority": 2,
+                    "available": False,
+                },
             ],
         },
     ]
@@ -448,13 +553,23 @@ class TestListCards(CliTestBase):
         self.assertEqual(payload["count"], 1)
         self.assertEqual(payload["cards"][0]["name"], "alsa_card.pci")
 
-    def test_table_shows_available_profile_count(self):
+    def test_the_columns_come_from_the_profiles(self):
+        """The counts live inside the profiles, not at the top level.
+
+        Reading `c["sinks"]` and `c["available"]` -- keys a card does
+        not have -- made every card render 0 sinks, 0 sources and 0
+        profiles, whatever the real profile data said.
+        """
         with self.patch_runner(list_cards=mock.Mock(return_value=self.CARDS)):
             code, out, _ = self.run_cli("list", "cards")
 
         self.assertEqual(code, 0)
         self.assertIn("alsa_card.pci", out)
-        self.assertIn("1", out)
+        # 1 sink + 1 sink across the two profiles; 1 source; 2 profiles.
+        self.assertIn("2", out)
+        row = [line for line in out.splitlines() if "alsa_card.pci" in line][0]
+        columns = row.split()
+        self.assertEqual(columns[-3:], ["2", "1", "2"])
 
     def test_no_cards_is_not_an_error(self):
         with self.patch_runner(list_cards=mock.Mock(return_value=[])):
@@ -638,15 +753,17 @@ class TestProfiles(CliTestBase):
 
     def test_lists_profile_names(self):
         with self.mgr(get_profile_names=mock.Mock(
-                return_value=["Stereo split (apps + voice)"])):
+                return_value=["Apps + Voice Split"])):
             payload = self.run_cli_json("profile", "list")
 
         self.assertEqual(payload["count"], 1)
-        self.assertIn("Stereo split", payload["profiles"][0]["name"])
+        self.assertIn("Apps + Voice", payload["profiles"][0]["name"])
 
     def test_show_prints_devices_and_routes_from_the_real_keys(self):
-        with self.mgr(get_profile=mock.Mock(return_value=self.PROFILE)):
-            code, out, _ = self.run_cli("profile", "show", "Stereo split")
+        with self.mgr(get_profile_names=mock.Mock(
+                return_value=["Apps + Voice Split"]),
+                      get_profile=mock.Mock(return_value=self.PROFILE)):
+            code, out, _ = self.run_cli("profile", "show", "Apps + Voice Split")
 
         self.assertEqual(code, 0)
         self.assertIn("app_sink", out)
@@ -656,9 +773,11 @@ class TestProfiles(CliTestBase):
     def test_apply_passes_the_profile_dict_not_the_name(self):
         """apply_profile takes a dict; handing it a name would be a TypeError."""
         applied = mock.Mock(return_value={"errors": [], "created": []})
-        with self.mgr(get_profile=mock.Mock(return_value=self.PROFILE),
+        with self.mgr(get_profile_names=mock.Mock(
+                return_value=["Apps + Voice Split"]),
+                      get_profile=mock.Mock(return_value=self.PROFILE),
                       apply_profile=applied):
-            code, _, _ = self.run_cli("profile", "apply", "Stereo split")
+            code, _, _ = self.run_cli("profile", "apply", "Apps + Voice Split")
 
         self.assertEqual(code, 0)
         self.assertIs(applied.call_args[0][0], self.PROFILE)
@@ -681,14 +800,14 @@ class TestProfiles(CliTestBase):
         self.assertIn("nosuch", err)
 
     def test_apply_matches_a_partial_profile_name(self):
-        """Profile names are long; `apply stereo` should find the one."""
+        """Profile names are long; `apply apps` should find the one."""
         applied = mock.Mock(return_value={"errors": [], "created": []})
         with self.mgr(
-            get_profile_names=mock.Mock(return_value=["Stereo split (apps + voice)"]),
+            get_profile_names=mock.Mock(return_value=["Apps + Voice Split"]),
             get_profile=mock.Mock(return_value=self.PROFILE),
             apply_profile=applied,
         ):
-            code, _, _ = self.run_cli("profile", "apply", "stereo split")
+            code, _, _ = self.run_cli("profile", "apply", "apps + voice")
 
         self.assertEqual(code, 0)
         applied.assert_called_once()

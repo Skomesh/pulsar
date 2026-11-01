@@ -19,8 +19,11 @@ import re
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
-RULES = "debian/rules"
+# Anchored to this file, so the script works from any directory.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+RULES = REPO_ROOT / "debian/rules"
 
 
 def logical_lines(text):
@@ -44,7 +47,7 @@ def logical_lines(text):
 
 def main():
     problems = []
-    text = open(RULES).read()
+    text = RULES.read_text(encoding="utf-8")
     lines = logical_lines(text)
 
     # --- structural make checks -------------------------------------
@@ -119,9 +122,22 @@ def main():
         )
         closes = sum(
             1 for _, line in recipes
-            if re.match(r"\s*@?\s*" + closer, line.lstrip("\t"))
+            # A word boundary, so "find ." is not counted as a "fi".
+            # The end-of-line case covers a construct that spans a
+            # continued line: debian/rules has
+            #     for size in ...; do \
+            #         install ...
+            #     done
+            # and the whole thing is one logical line, so its "done" is
+            # not at the start of anything.
+            if re.match(r"\s*@?\s*" + closer + r"\b", line.lstrip("\t"))
+            or re.search(r"\b" + closer + r"\s*$", line.rstrip())
         )
-        if opens != closes and closes:
+        # Any imbalance is a problem. The old guard was
+        # `opens != closes and closes`, so an imbalance where NOTHING
+        # was closed -- opens=3, closes=0, the more important direction
+        # -- was never reported.
+        if opens != closes:
             problems.append(f"{name}: {opens} open vs {closes} close")
 
     print(f"targets found ({len(targets)}):")

@@ -36,10 +36,17 @@ import unittest
 #: conditionally, so an empty winfo_manager() is correct until the user
 #: ticks the checkbox.
 MUST_BE_VISIBLE = [
-    "routing_frame",
     "unified_tree",
     "multi_routing_frame",
 ]
+#
+# "routing_frame" was removed: it was the outer LabelFrame titled
+# "Routing" that wrapped the single-output dropdown and the Multi-output
+# Routing panel. With the dropdown gone it was a box around a single box,
+# so the Multi-output Routing panel was promoted to be a direct child of
+# the tab. The regression these tests guard -- a panel built but never
+# given a geometry manager -- now applies to multi_routing_frame, which is
+# the frame that actually holds the controls.
 
 
 def have_display():
@@ -66,16 +73,16 @@ class TestWidgetsAreDisplayed(unittest.TestCase):
     def test_routing_frame_has_a_geometry_manager(self):
         """The regression guard for issue #17."""
         self.assertTrue(
-            self.app.routing_frame.winfo_manager(),
-            "routing_frame has no geometry manager, so it can never be seen",
+            self.app.multi_routing_frame.winfo_manager(),
+            "multi_routing_frame has no geometry manager, so it can never be seen",
         )
 
     def test_routing_frame_is_larger_than_a_collapsed_default(self):
         """A packed widget gets a real size; an unmanaged one stays 1x1."""
-        self.app.routing_frame.update_idletasks()
+        self.app.multi_routing_frame.update_idletasks()
         self.assertGreater(
-            self.app.routing_frame.winfo_width(), 1,
-            "routing_frame is still 1x1 -- built but never displayed")
+            self.app.multi_routing_frame.winfo_width(), 1,
+            "multi_routing_frame is still 1x1 -- built but never displayed")
 
     def test_frames_intended_to_be_visible_are_all_attached(self):
         orphans = []
@@ -88,11 +95,19 @@ class TestWidgetsAreDisplayed(unittest.TestCase):
         self.assertEqual(orphans, [], "widgets not attached to any parent")
 
     def test_the_nested_multi_routing_panel_is_reachable(self):
-        """It was gridded into an invisible parent, so it never mapped."""
-        self.app.routing_frame.update_idletasks()
+        """It was gridded into an invisible parent, so it never mapped.
+
+        The nesting it used to be gridded into ("routing_frame") is gone;
+        the panel is now a direct child of the tab. The property under
+        test is unchanged: the panel is attached and mapped.
+        """
+        self.app.multi_routing_frame.update_idletasks()
         self.assertTrue(
             self.app.multi_routing_frame.winfo_manager(),
             "multi_routing_frame is not attached")
+        self.assertTrue(
+            self.app.multi_routing_frame.winfo_ismapped(),
+            "multi_routing_frame is attached but never mapped")
 
 
 if __name__ == "__main__":

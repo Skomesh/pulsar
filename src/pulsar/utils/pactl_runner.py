@@ -36,6 +36,24 @@ class LoopbackCycleError(Exception):
         return f" {self.arrow} ".join(self.chain)
 
 
+# The arguments the modules Pulsar creates accept. `pactl list modules
+# short` prints a module's arguments space separated and unquoted, so an
+# argument printed after `sink_properties=` looks exactly like a
+# property in the proplist. It can still be recognised by name.
+MODULE_ARG_NAMES = frozenset({
+    "sink_name",
+    "source_name",
+    "source",
+    "sink",
+    "rate",
+    "format",
+    "channel_map",
+    "media.class",
+    "latency_msec",
+    "network.port",
+})
+
+
 class PactlRunner:
     """
     A class to execute PulseAudio commands and parse their output.
@@ -190,6 +208,11 @@ class PactlRunner:
               - 'application': application.name, or '' if unset
               - 'node_name': node.name, or '' if unset
               - 'media': media.name, or '' if unset
+              - 'node_id': object.id, or '' if unset. This IS the PipeWire
+                node id of the stream, 1:1, so it is the exact key that
+                joins this view to the discovery view (which reports
+                PipeWire node ids). Two instances of one application
+                share a node.name, so node_id is what tells them apart.
               - 'sink_index': the index of the sink it is playing to
               - 'sink': the NAME of that sink, or '' if the sink has gone away
             Empty list if none.
@@ -219,6 +242,7 @@ class PactlRunner:
                     'application': '',
                     'node_name': '',
                     'media': '',
+                    'node_id': '',
                     'sink_index': '',
                     'sink': '',
                 }
@@ -238,6 +262,9 @@ class PactlRunner:
                         current['node_name'] = value
                     elif key == 'media.name':
                         current['media'] = value
+                    elif key == 'object.id':
+                        # The PipeWire node id of the stream, 1:1.
+                        current['node_id'] = value
                 elif stripped.startswith('Sink:'):
                     sink_index = stripped.partition(':')[2].strip()
                     current['sink_index'] = sink_index
@@ -248,28 +275,32 @@ class PactlRunner:
         return entries
 
     @staticmethod
-    def sink_inputs_for_node(
-        streams: List[Dict[str, Any]], node_name: str
-    ) -> List[Dict[str, Any]]:
-        """Return the sink inputs whose node.name matches ``node_name``.
+    @staticmethod
+    def sink_input_for_node_id(
+        streams: List[Dict[str, Any]], node_id: Any
+    ) -> Optional[Dict[str, Any]]:
+        """Return the sink input whose PipeWire node id matches exactly.
 
-        This is how a discovery row (which carries a PipeWire node name from
-        pw-dump) is matched to a pactl sink input, since pactl does not
-        expose the owning pid on a sink input and the discovery side does not
-        always have one either.
+        ``object.id`` on a sink input IS the PipeWire node id of the
+        stream, 1:1, so this is an exact join between the discovery view
+        (which reports PipeWire node ids) and this view (which reports
+        sink-input indices).
 
-        Falls back to application.name when node.name is absent on the pactl
-        side, which is common for apps that do not set one.
+        Matching on node.name cannot do this: two instances of the same
+        application share a node.name, so a name lookup either picks an
+        arbitrary one of them or has to refuse. With the node id there
+        is nothing to guess.
 
-        Returns every match, not just the first: a caller that cannot
-        disambiguate needs to know there was a choice to make.
+        Returns None when there is no match, or more than one -- the
+        caller must not act on an ambiguous answer.
         """
-        if not node_name:
-            return []
-        return [
-            s for s in streams
-            if s.get('node_name') == node_name or s.get('application') == node_name
-        ]
+        if node_id is None:
+            return None
+        wanted = str(node_id)
+        matches = [s for s in streams if s.get("node_id") == wanted]
+        if len(matches) == 1:
+            return matches[0]
+        return None
 
     @staticmethod
     def move_sink_input(index: str, sink_name: str, logger=None) -> bool:
@@ -623,7 +654,12 @@ class PactlRunner:
         Args:
             media_class: One of 'Audio/Sink', 'Audio/Source', or 'Audio/Duplex'.
             name: Sink identifier.
-            description: Human-readable description (unused in command, kept for API compat).
+            description: Human-readable description. Passed to PulseAudio
+                as ``device.description`` in sink_properties, so it shows up
+                in `pactl list sinks`. Previously documented as 'unused in
+                command' and genuinely dropped, which is why the GUI's
+                Description field appeared to do nothing -- see issue on
+                user testing feedback.
             channels: Number of channels.
             rate: Sample rate in Hz (optional).
             format: Sample format (optional).
@@ -657,13 +693,58 @@ class PactlRunner:
         # caller passed and cannot be stripped by it. Merged into the
         # caller's own properties rather than replacing them: a device
         # carrying `device.api=game` still needs that key.
-        cmd_args.append(
-            f'sink_properties={PactlRunner._with_managed_property(sink_properties)}'
-        )
+        properties = PactlRunner._with_managed_property(sink_properties)
+
+        # The description reaches PulseAudio as device.description, which is
+        # what makes it show up in `pactl list sinks`. It used to be
+        # accepted and dropped, so the GUI's Description field appeared to
+        # do nothing.
+        #
+        # Spaces are NOT representable. PulseAudio's sink_properties parser
+        # splits on whitespace with no quoting and no escaping -- measured
+        # on a live server:
+        #
+        #     device.description=My Rig        -> Description: My
+        #     device.description='My Rig'      -> Description: My
+        #     device.description="My Rig"      -> Description: My
+        #     device.description=Game\ Output  -> Description: Game
+        #
+        # So a multi-word description is silently truncated at the first
+        # space, which is worse than not setting it. Underscores survive,
+        # and PulseAudio itself writes underscores in device names, so it
+        # is the least surprising substitute available.
+        if description and "device.description" not in properties:
+            safe = "_".join(str(description).split())
+            if safe:
+                properties = f"device.description={safe} {properties}"
+
+        cmd_args.append(f"sink_properties={properties}")
 
         output, return_code = PactlRunner.run_command(cmd_args, logger)
 
         return return_code == 0
+
+    @staticmethod
+    def managed_null_sink_names(logger=None) -> List[str]:
+        """The names of the null-sinks this program created.
+
+        A `module-null-sink` carries `pulsar.managed=true` in its
+        argument when Pulsar made it. That marker is what makes it
+        ours, and it is how a loopback can be recognised as ours too:
+        we build a loopback from a managed sink's monitor.
+        """
+        names = []
+        for m in PactlRunner.list_modules(logger):
+            if m.get('name') != 'module-null-sink':
+                continue
+            argument = m.get('argument', '')
+            if PactlRunner.MANAGED_PROPERTY not in argument:
+                continue
+            for token in argument.split():
+                if token.startswith('sink_name='):
+                    names.append(token[len('sink_name='):])
+                    break
+        return names
 
     @staticmethod
     def unload_all_null_sinks(logger=None, only_managed: bool = True) -> Tuple[int, List[str]]:
@@ -968,6 +1049,62 @@ class PactlRunner:
         return loopbacks
 
     @staticmethod
+    def unload_null_sink_by_name(sink_name, require_managed=True, logger=None) -> bool:
+        """Unload the null-sink with this name, found fresh by identity.
+
+        Never trust a module id captured earlier.
+
+        PipeWire REUSES module ids once they are freed. Observed in a
+        single test run: id 536870920 belonged to `cap_opt`, then to
+        `cap_dup`, then to `cap_lb`, then to `cap_sink`, then to
+        `cap_src`. An id recorded at creation time therefore points at a
+        completely different module by the time it is used, and
+        unloading it removes the wrong thing.
+
+        It did, in practice: unloading a stale id removed
+        module-always-sink, and with it the machine's default output --
+        the user's speakers disappeared mid-test-session.
+
+        So the module is looked up by what it IS -- its sink_name -- and
+        its current id is read at that moment. The ownership marker is
+        still required by default, so this cannot be used to remove a
+        sink this program did not create.
+        """
+        modules = PactlRunner.list_modules(logger)
+        for m in modules:
+            if m.get("name") != "module-null-sink":
+                continue
+            if f"sink_name={sink_name}" not in set(m.get("argument", "").split()):
+                continue
+            if require_managed and not PactlRunner._is_managed_module(m):
+                continue
+            mod_id = m.get("id")
+            if not mod_id:
+                continue
+            return PactlRunner.unload_module(mod_id, logger)
+        return False
+
+    @staticmethod
+    def unload_loopback_by_endpoints(source, sink, logger=None) -> bool:
+        """Unload the loopback routing source -> sink, found fresh.
+
+        The same id-reuse hazard as unload_null_sink_by_name. A loopback
+        is identified by its two endpoints, which are stable, rather than
+        by a module id that may since have been reused.
+        """
+        modules = PactlRunner.list_modules(logger)
+        for m in modules:
+            if m.get("name") != "module-loopback":
+                continue
+            tokens = set(m.get("argument", "").split())
+            if f"source={source}" in tokens and f"sink={sink}" in tokens:
+                mod_id = m.get("id")
+                if not mod_id:
+                    continue
+                return PactlRunner.unload_module(mod_id, logger)
+        return False
+
+    @staticmethod
     def unload_loopback(module_id: str, logger=None) -> bool:
         """
         Unload a module-loopback by ID.
@@ -999,11 +1136,34 @@ class PactlRunner:
             or unknown.
         """
         modules = PactlRunner.list_modules(logger)
+        # Match the ARGUMENT TOKEN, not a substring of it. `unload_null_sink_by_name`
+        # already does it this way, and the two must agree: with the
+        # substring test, `is_null_sink('game')` was True whenever a
+        # null-sink named `game_sink` existed, so a real hardware sink
+        # called `game` was treated as virtual and dropped from the
+        # "Route to" list with no explanation.
         marker = f'sink_name={sink_name}'
         for m in modules:
-            if m.get('name') == 'module-null-sink' and marker in m.get('argument', ''):
+            if m.get('name') != 'module-null-sink':
+                continue
+            if marker in set(m.get('argument', '').split()):
                 return True
         return False
+
+    @staticmethod
+    def server_reachable(logger=None) -> bool:
+        """True if pactl can reach the audio server.
+
+        Every list_* method returns an empty list when pactl fails. That
+        is right for the GUI, which has nothing to show either way, but
+        it makes "the server is gone" indistinguishable from "there are
+        no devices". A caller that has to tell the two apart -- the
+        CLI, which scripts; the routing handler, which otherwise tells
+        the user an output "no longer exists" when the truth is that it
+        could not look -- needs to ask.
+        """
+        _output, return_code = PactlRunner.run_command(['info'], logger)
+        return return_code == 0
 
     @staticmethod
     def monitor_source_for(sink_name: str, logger=None) -> Optional[str]:
@@ -1085,25 +1245,26 @@ class PactlRunner:
         """
         result: Dict[str, str] = {}
         tokens = args_str.split()
-        i = 0
-        while i < len(tokens):
-            tok = tokens[i]
+        for index, tok in enumerate(tokens):
             if '=' not in tok:
-                i += 1
                 continue
             key, _, value = tok.partition('=')
-            if key == 'sink_properties':
-                # Capture everything after sink_properties= as one value
-                # (the rest of the tokens are the proplist).
-                # First token's value is whatever came after the first '='.
-                # We need to reconstruct: drop the 'sink_properties=' prefix
-                # and re-join everything from here.
-                value = args_str.split('sink_properties=', 1)[1]
+            if key != 'sink_properties':
                 result[key] = value
-                return result  # sink_properties always ends the args list
-            else:
-                result[key] = value
-            i += 1
+                continue
+            # Everything from here on is the proplist, except for any
+            # module arguments that were printed after it. `pactl list
+            # modules short` prints the arguments space separated and
+            # unquoted, so they can only be told apart by name.
+            proplist = [value]
+            for trailing in tokens[index + 1:]:
+                trailing_key, _, trailing_value = trailing.partition('=')
+                if trailing_key in MODULE_ARG_NAMES:
+                    result[trailing_key] = trailing_value
+                else:
+                    proplist.append(trailing)
+            result[key] = ' '.join(proplist)
+            break
         return result
 
     @staticmethod

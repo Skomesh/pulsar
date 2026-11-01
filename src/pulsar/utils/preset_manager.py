@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from pulsar.utils.paths import (
     legacy_presets_dir,
     looks_like_preset_entry,
+    quarantine_unreadable,
     read_json_dict,
     take_legacy_section,
     user_presets_dir,
@@ -117,7 +118,9 @@ class PresetManager:
         than an object all yield {}. A list used to propagate an
         AttributeError out of dict.update() and stop the window opening.
         """
-        return read_json_dict(self.presets_file)
+        data, self._load_error = read_json_dict(self.presets_file,
+                                                   label="presets")
+        return data
 
     def _save_user_presets(self, presets: Dict[str, Any]) -> bool:
         """Save user presets to file.
@@ -125,7 +128,20 @@ class PresetManager:
         Atomic: the previous contents survive a failed write intact. See
         write_json_atomic -- a plain open(..., 'w') truncates first and
         turns a full disk into permanent loss of everything the user saved.
+
+        If the file on disk is one we could not READ, saving must not
+        overwrite it. Writing {} plus the new entry over data we failed
+        to parse destroys the only copy while reporting success -- which
+        is what happened until this was caught in user testing. The bad
+        file is moved aside instead, so the app works and the bytes
+        survive for repair.
         """
+        if getattr(self, "_load_error", None):
+            if not quarantine_unreadable(self.presets_file):
+                print("Error: refusing to save over unreadable preset "
+                      "data.")
+                return False
+            self._load_error = None
         return write_json_atomic(self.presets_file, presets)
 
     def get_all_presets(self) -> Dict[str, Any]:

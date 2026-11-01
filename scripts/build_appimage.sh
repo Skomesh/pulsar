@@ -67,7 +67,10 @@ set -euo pipefail
 
 REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 PKG_DIR="$REPO_ROOT/packaging/appimage"
-DIST_DIR="$REPO_ROOT/dist"
+# The one output location, shared with the deb, rpm, snap and flatpak builds
+# and with the release workflow's `asset_path: dist/*`. Overridable so a
+# packaging experiment can write somewhere else without patching this file.
+DIST_DIR="${PULSAR_DIST_DIR:-$REPO_ROOT/dist}"
 
 # --- pinned build inputs ------------------------------------------------
 # Pinned, not "latest": the URL and its SHA-256 are recorded together so two
@@ -94,6 +97,9 @@ usage() {
     cat <<'EOF'
 
 Options:
+  --version VER         Assert VER against pyproject.toml before building.
+                        Does not override it; pyproject.toml is the source
+                        of truth.
   --stage-only          Build and verify the AppDir, then stop (no appimagetool).
   --appimagetool PATH   Use this appimagetool instead of $PATH.
   --output FILE         Write the AppImage to FILE (default: dist/pulsar-<ver>-<arch>.AppImage).
@@ -119,6 +125,11 @@ PYTHON_TARBALL="${PULSAR_PYTHON_TARBALL:-}"
 PYTHON_PREFIX="${PULSAR_PYTHON_PREFIX:-}"
 PYTHON_URL="${PULSAR_PYTHON_URL:-}"
 PYTHON_SHA256="${PULSAR_PYTHON_SHA256:-}"
+# Asserted against pyproject.toml in main(), never used to override it.
+# pyproject.toml is the single source of truth for the version; the release
+# workflow passes the tag so a mismatch fails loudly here instead of
+# producing an AppImage whose filename disagrees with its contents.
+EXPECT_VERSION=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -126,6 +137,7 @@ while [ $# -gt 0 ]; do
         --keep-appdir)    KEEP_APPDIR=1 ;;
         --strip)          DO_STRIP=yes ;;
         --no-strip)       DO_STRIP=no ;;
+        --version)        EXPECT_VERSION=${2:?--version needs a value}; shift ;;
         --appimagetool)   APPIMAGETOOL=${2:?--appimagetool needs a path}; shift ;;
         --output)         OUTPUT=${2:?--output needs a path}; shift ;;
         --python-tarball) PYTHON_TARBALL=${2:?--python-tarball needs a path}; shift ;;
@@ -207,6 +219,11 @@ main() {
     local version
     version=$(read_project_version "$build_python")
     log "Pulsar version: $version (from pyproject.toml)"
+
+    if [ -n "$EXPECT_VERSION" ] && [ "$EXPECT_VERSION" != "$version" ]; then
+        die "--version $EXPECT_VERSION does not match pyproject.toml ($version).
+  The filename would say one version and the payload contain another."
+    fi
 
     local arch out_name
     arch="$ARCH"
@@ -512,10 +529,8 @@ install_wheel() {
 
     [ -f "$site_packages/pulsar/__main__.py" ] \
         || die "wheel did not install pulsar/__main__.py into $site_packages"
-    # package-data: the wheel must carry the built-in profiles or the app
-    # starts with an empty preset list.
-    [ -f "$site_packages/pulsar/utils/presets/builtin_profiles.json" ] \
-        || die "wheel is missing pulsar/utils/presets/builtin_profiles.json (package-data not built?)"
+    # Pulsar ships no package data: the profile list is only what the
+    # user saved, so there is no preset JSON to find in the wheel.
 }
 
 # --- launchers, desktop entry, icons ------------------------------------

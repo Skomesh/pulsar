@@ -153,9 +153,8 @@ fi
 
 # Nothing writable under /usr/share/pulsar: user data resolves to
 # $XDG_DATA_HOME/pulsar/presets, so a presets directory in the install prefix
-# would be dead weight the application never reads. The built-in profiles ship
-# inside the module as package data (pulsar/utils/presets/builtin_profiles.json)
-# and are read-only.
+# would be dead weight the application never reads. The package ships no data
+# files at all -- the profile list is only what the user saved.
 
 # Desktop entry. The source pulsar.desktop carries
 # Exec=PLACEHOLDER_EXEC_PATH, which install.sh substitutes for a git

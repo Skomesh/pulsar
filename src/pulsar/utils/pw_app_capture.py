@@ -34,6 +34,8 @@ import subprocess
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from pulsar.utils.pw_diagnostics import PIPEWIRE_TOOLS_HINT
+
 # Portal ScreenCast source type bit flags (see xdg-desktop-portal docs).
 SOURCE_TYPE_MONITOR = 1
 SOURCE_TYPE_WINDOW = 2
@@ -47,6 +49,44 @@ SCREENCAST_IFACE = "org.freedesktop.portal.ScreenCast"
 def portal_available() -> bool:
     """Return True if the xdg-desktop-portal ScreenCast interface is reachable."""
     return shutil.which("gdbus") is not None
+
+
+def pw_dump_available() -> bool:
+    """True if pw-dump is installed.
+
+    See PIPEWIRE_TOOLS_HINT for the per-distribution package names.
+
+    The app needs this for app-audio discovery and for the Diagnostics
+    tab. Every package format already depends on it (debian/control:
+    pipewire-bin, pulsar.spec: pipewire-utils, snap: pipewire-bin), but
+    a user who installed from source or a tarball may not have it.
+    """
+    return shutil.which("pw-dump") is not None
+
+
+class PwDumpUnavailable(RuntimeError):
+    """pw-dump is not installed, so the graph cannot be inspected.
+
+    Raised instead of returning an empty result, because "the tool that
+    finds app audio streams is missing" and "no app is playing audio"
+    are completely different situations and the user needs to be told
+    which one they are in. Returning [] for both made the Capture tab
+    claim that nothing was playing when in fact nothing was looking.
+
+    The message names the PACKAGE, not the binary: pw-dump lives in
+    pipewire-bin on Debian and Ubuntu, in pipewire-utils on Fedora, and
+    in pipewire on Arch. "pw-dump is not installed" leaves the user
+    guessing which package to install.
+    """
+
+    def __init__(self, detail: str = ""):
+        msg = (
+            f"pw-dump not found. App audio discovery needs it -- "
+            f"{PIPEWIRE_TOOLS_HINT}."
+        )
+        if detail:
+            msg = f"{msg} ({detail})"
+        super().__init__(msg)
 
 
 def portal_screencast_version() -> Optional[int]:
@@ -129,12 +169,16 @@ def supports_app_capture() -> bool:
 # ----------------------------------------------------------------------
 
 
-def _run_pw_dump(logger=None) -> Optional[List[Dict[str, Any]]]:
-    """Run `pw-dump` and return the parsed JSON list, or None on failure."""
+def _run_pw_dump(logger=None) -> List[Dict[str, Any]]:
+    """Run `pw-dump` and return the parsed JSON list.
+
+    Raises PwDumpUnavailable if the tool is missing, so the caller can
+    tell "cannot look" apart from "looked and found nothing".
+    """
     if not shutil.which("pw-dump"):
         if logger:
-            logger("pw-dump not found on PATH; install pipewire-tools")
-        return None
+            logger(f"pw-dump not found on PATH; {PIPEWIRE_TOOLS_HINT}")
+        raise PwDumpUnavailable()
     try:
         out = subprocess.check_output(
             ["pw-dump"], stderr=subprocess.DEVNULL, timeout=5
@@ -142,13 +186,13 @@ def _run_pw_dump(logger=None) -> Optional[List[Dict[str, Any]]]:
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as e:
         if logger:
             logger(f"pw-dump failed: {e}")
-        return None
+        raise PwDumpUnavailable(str(e)) from e
     try:
         return json.loads(out)
     except json.JSONDecodeError as e:
         if logger:
             logger(f"pw-dump returned invalid JSON: {e}")
-        return None
+        raise PwDumpUnavailable(f"invalid JSON: {e}") from e
 
 
 def discover_app_audio_nodes(logger=None) -> List[Dict[str, Any]]:
@@ -167,19 +211,22 @@ def discover_app_audio_nodes(logger=None) -> List[Dict[str, Any]]:
         Stream/Input/Audio (capture), None. Computed via pw-dump Links
         rather than `pactl list sink-inputs` because PA doesn't always
         enumerate all PW stream nodes.
+      - sink_names: EVERY sink the stream reaches. A stream can reach
+        more than one, because routing an app to several outputs at
+        once is a supported feature. `sink_name` is the first of them.
 
-    Returns an empty list on error. Logs via `logger` if provided.
+    Returns an empty list when pw-dump runs and finds nothing. Raises
+    PwDumpUnavailable when pw-dump cannot be run at all -- an empty
+    list would claim that no app is playing audio, which is a different
+    and wrong conclusion.
+
+    Logs via `logger` if provided.
     """
     data = _run_pw_dump(logger)
-    if data is None:
-        return []
 
     # Build lookup tables:
     # - nodes_by_id: PW node id -> node name (for sink lookup)
     nodes_by_id: Dict[int, str] = {}
-    # - sink_for_input_node: for each PW node id that's a Stream/Input/Audio
-    #   (an app playing audio), the sink name it's connected to (via Links)
-    sink_for_input_node: Dict[int, str] = {}
 
     for d in data:
         if d.get("type") != "PipeWire:Interface:Node":
@@ -199,8 +246,12 @@ def discover_app_audio_nodes(logger=None) -> List[Dict[str, Any]]:
     # comes out) and the sink is the INPUT side (audio goes in).
     #
     # So for each link: output_node = source of audio, input_node = sink.
-    # We map source_node_id -> sink_name for Stream/Output/Audio nodes.
-    sink_for_input_node: Dict[int, str] = {}
+    # We map source_node_id -> sink names for Stream/Output/Audio nodes.
+    # A stream can reach MORE THAN ONE sink: routing an app to several
+    # outputs at once is a supported feature, and each of those links
+    # shows up here. Only the first was kept, so the discovery reported
+    # a partial view of where the app's audio was going.
+    sinks_for_input_node: Dict[int, List[str]] = {}
     for d in data:
         if d.get("type") != "PipeWire:Interface:Link":
             continue
@@ -216,9 +267,10 @@ def discover_app_audio_nodes(logger=None) -> List[Dict[str, Any]]:
         # The link's output side is the audio SOURCE (e.g. an app's
         # Stream/Output/Audio node). The input side is the SINK
         # (where the audio is going). For our lookup, we want to
-        # find the sink for each stream node: out_id (source) -> in_name (sink).
-        if sink_for_input_node.get(out_id) is None:
-            sink_for_input_node[out_id] = in_name
+        # find the sinks for each stream node: out_id (source) -> sinks.
+        sinks = sinks_for_input_node.setdefault(out_id, [])
+        if in_name not in sinks:
+            sinks.append(in_name)
 
     out: List[Dict[str, Any]] = []
     for d in data:
@@ -247,7 +299,7 @@ def discover_app_audio_nodes(logger=None) -> List[Dict[str, Any]]:
                 props.get("application.process.id") else None
         except ValueError:
             pid = None
-        sink_name = sink_for_input_node.get(node_id)
+        sink_names = sinks_for_input_node.get(node_id, [])
         out.append({
             "id": node_id,
             "node_name": node_name,
@@ -256,7 +308,10 @@ def discover_app_audio_nodes(logger=None) -> List[Dict[str, Any]]:
             "binary": binary,
             "pid": pid,
             "description": f"{app_name} ({pid or '?'}) - {mc}",
-            "sink_name": sink_name,
+            # The first sink it reaches. A stream can reach several --
+            # `sink_names` has them all.
+            "sink_name": sink_names[0] if sink_names else None,
+            "sink_names": sink_names,
         })
 
     # Stable, useful ordering: input streams (capture) first, then output
@@ -419,7 +474,7 @@ def _which_pw_record() -> Optional[str]:
 
 
 def pw_record_available() -> bool:
-    """True iff `pw-record` is installed (the pipewire-tools package)."""
+    """True iff `pw-record` is installed."""
     return _which_pw_record() is not None
 
 
@@ -456,7 +511,7 @@ def start_pw_record(
     pw_record = _which_pw_record()
     if not pw_record:
         raise PwRecordError(
-            "pw-record not found on PATH. Install pipewire-tools."
+            f"pw-record not found on PATH. {PIPEWIRE_TOOLS_HINT}."
         )
     cmd = [
         pw_record,

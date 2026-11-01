@@ -341,8 +341,17 @@ class ProfileManager:
                 "channels": int(args["channels"]) if "channels" in args else 2,
             }
             # Optional fields — only include if set
-            if "description" in args.get("properties", {}):
-                device["description"] = args["properties"]["description"]
+            sink_props_str = args.get("sink_properties")
+            sink_props = (
+                self._parse_sink_properties_string(sink_props_str)
+                if sink_props_str else {}
+            )
+            # The description is a sink property, not a module argument:
+            # parse_pactl_module_args never produced a "properties" key,
+            # so reading one left every captured device without a
+            # description and apply_profile renamed them all.
+            if sink_props.get("device.description"):
+                device["description"] = sink_props["device.description"]
             if "rate" in args:
                 try:
                     device["rate"] = int(args["rate"])
@@ -352,11 +361,8 @@ class ProfileManager:
                 device["format"] = args["format"]
             if "channel_map" in args:
                 device["channel_map"] = args["channel_map"]
-            sink_props_str = args.get("sink_properties")
             if sink_props_str:
-                device["sink_properties"] = self._parse_sink_properties_string(
-                    sink_props_str
-                )
+                device["sink_properties"] = sink_props
             devices.append(device)
 
         # Capture loopbacks — only include ones where the source is a sink we

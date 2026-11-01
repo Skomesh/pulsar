@@ -280,3 +280,47 @@ class TestGraphSnapshotLive(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSuspendedAudioNodes(unittest.TestCase):
+    """The suspended-node warning compared two different populations.
+
+    It counted suspended AUDIO nodes and compared the count against
+    the number of ALL nodes, so two suspended audio nodes among ten
+    other nodes gave 2 > 6 -- and the warning never fired in the case
+    it exists for.
+    """
+
+    def _snapshot(self, audio_nodes, other_nodes=10):
+        return {
+            "nodes": [
+                {"name": f"a{i}", "media_class": "Audio/Sink", "state": state}
+                for i, state in enumerate(audio_nodes)
+            ] + [
+                {"name": f"o{i}", "media_class": "Stream/Output/Audio",
+                 "state": "running"}
+                for i in range(other_nodes)
+            ],
+            "links": [], "clients": [], "modules": [], "devices": [], "ports": [],
+        }
+
+    def test_mostly_suspended_audio_nodes_are_flagged(self):
+        health = health_summary(self._snapshot(["suspended", "suspended"]))
+        self.assertTrue(
+            any("suspended" in w for w in health["warnings"]),
+            f"suspended audio nodes were not flagged: {health['warnings']}",
+        )
+
+    def test_the_warning_counts_audio_nodes_not_all_nodes(self):
+        health = health_summary(self._snapshot(["suspended", "suspended"]))
+        warning = next(w for w in health["warnings"] if "suspended" in w)
+        self.assertIn("2 of 2 audio nodes", warning)
+
+    def test_a_few_suspended_audio_nodes_are_not_flagged(self):
+        health = health_summary(
+            self._snapshot(["suspended", "running", "running"], other_nodes=0)
+        )
+        self.assertFalse(
+            any("suspended" in w for w in health["warnings"]),
+            f"one suspended node of three was flagged: {health['warnings']}",
+        )

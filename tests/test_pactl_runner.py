@@ -294,3 +294,56 @@ class TestLoopback(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestParseModuleArgs(unittest.TestCase):
+    """parse_pactl_module_args recovers a module's arguments.
+
+    `pactl list modules short` prints a module's arguments space
+    separated and with no quoting, so a module argument that comes
+    after `sink_properties=` cannot be told apart from a property in
+    the proplist by shape alone. The argument strings below are the
+    real output of a live server.
+    """
+
+    def test_a_module_argument_after_sink_properties_is_not_swallowed(self):
+        # pactl load-module module-null-sink sink_name=zz_probe \
+        #     sink_properties=device.description=My_Rig rate=44100
+        # pactl list modules short
+        # -> sink_name=zz_probe sink_properties=device.description=My_Rig rate=44100
+        args = PactlRunner.parse_pactl_module_args(
+            "sink_name=zz_probe sink_properties=device.description=My_Rig rate=44100"
+        )
+        self.assertEqual(args.get("rate"), "44100")
+        self.assertEqual(args.get("sink_name"), "zz_probe")
+        self.assertIn("device.description=My_Rig", args.get("sink_properties", ""))
+
+    def test_the_proplist_keeps_every_property(self):
+        args = PactlRunner.parse_pactl_module_args(
+            "sink_name=x sink_properties=device.description='CapOpt' "
+            "device.icon_name='speaker' rate=44100"
+        )
+        props = args.get("sink_properties", "")
+        self.assertIn("device.description='CapOpt'", props)
+        self.assertIn("device.icon_name='speaker'", props)
+        self.assertEqual(args.get("rate"), "44100")
+
+    def test_a_proplist_value_with_a_space_is_kept_whole(self):
+        args = PactlRunner.parse_pactl_module_args(
+            "sink_name=x sink_properties=device.description=My Rig"
+        )
+        self.assertEqual(
+            args.get("sink_properties"), "device.description=My Rig"
+        )
+
+    def test_a_plain_module_is_unaffected(self):
+        args = PactlRunner.parse_pactl_module_args(
+            "sink_name=x rate=48000 channels=2 media.class=Audio/Sink"
+        )
+        self.assertEqual(args.get("sink_name"), "x")
+        self.assertEqual(args.get("rate"), "48000")
+        self.assertEqual(args.get("channels"), "2")
+        self.assertEqual(args.get("media.class"), "Audio/Sink")
+
+    def test_a_module_without_arguments_is_empty(self):
+        self.assertEqual(PactlRunner.parse_pactl_module_args(""), {})

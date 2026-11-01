@@ -374,14 +374,13 @@ def health_summary(snapshot: Dict[str, Any]) -> Dict[str, Any]:
 
     # Check for suspended audio nodes (not necessarily wrong — could
     # be idle — but worth flagging if many)
-    suspended_audio = [
-        n for n in nodes
-        if n.get("media_class", "").startswith("Audio/")
-        and n.get("state") == "suspended"
+    audio_nodes = [
+        n for n in nodes if n.get("media_class", "").startswith("Audio/")
     ]
-    if len(suspended_audio) > len(nodes) / 2 and nodes:
+    suspended_audio = [n for n in audio_nodes if n.get("state") == "suspended"]
+    if audio_nodes and len(suspended_audio) > len(audio_nodes) / 2:
         warnings.append(
-            f"{len(suspended_audio)} of {len(nodes)} audio nodes are suspended "
+            f"{len(suspended_audio)} of {len(audio_nodes)} audio nodes are suspended "
             "(idle but available; not necessarily a problem)"
         )
 

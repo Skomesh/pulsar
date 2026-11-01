@@ -36,6 +36,24 @@ class LoopbackCycleError(Exception):
         return f" {self.arrow} ".join(self.chain)
 
 
+# The arguments the modules Pulsar creates accept. `pactl list modules
+# short` prints a module's arguments space separated and unquoted, so an
+# argument printed after `sink_properties=` looks exactly like a
+# property in the proplist. It can still be recognised by name.
+MODULE_ARG_NAMES = frozenset({
+    "sink_name",
+    "source_name",
+    "source",
+    "sink",
+    "rate",
+    "format",
+    "channel_map",
+    "media.class",
+    "latency_msec",
+    "network.port",
+})
+
+
 class PactlRunner:
     """
     A class to execute PulseAudio commands and parse their output.
@@ -1250,25 +1268,26 @@ class PactlRunner:
         """
         result: Dict[str, str] = {}
         tokens = args_str.split()
-        i = 0
-        while i < len(tokens):
-            tok = tokens[i]
+        for index, tok in enumerate(tokens):
             if '=' not in tok:
-                i += 1
                 continue
             key, _, value = tok.partition('=')
-            if key == 'sink_properties':
-                # Capture everything after sink_properties= as one value
-                # (the rest of the tokens are the proplist).
-                # First token's value is whatever came after the first '='.
-                # We need to reconstruct: drop the 'sink_properties=' prefix
-                # and re-join everything from here.
-                value = args_str.split('sink_properties=', 1)[1]
+            if key != 'sink_properties':
                 result[key] = value
-                return result  # sink_properties always ends the args list
-            else:
-                result[key] = value
-            i += 1
+                continue
+            # Everything from here on is the proplist, except for any
+            # module arguments that were printed after it. `pactl list
+            # modules short` prints the arguments space separated and
+            # unquoted, so they can only be told apart by name.
+            proplist = [value]
+            for trailing in tokens[index + 1:]:
+                trailing_key, _, trailing_value = trailing.partition('=')
+                if trailing_key in MODULE_ARG_NAMES:
+                    result[trailing_key] = trailing_value
+                else:
+                    proplist.append(trailing)
+            result[key] = ' '.join(proplist)
+            break
         return result
 
     @staticmethod

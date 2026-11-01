@@ -10,6 +10,7 @@ motivated this design.
 """
 
 import shutil
+import subprocess
 import tempfile
 import unittest
 
@@ -478,3 +479,33 @@ class TestRoundtrip(_ProfileTestBase):
         # Both loopbacks should target the same hardware
         targets = {lb["sink"] for lb in loopbacks}
         self.assertEqual(targets, {target[0]})
+
+
+class TestCaptureDescription(_ProfileTestBase):
+    """A captured device kept the description it was created with.
+
+    capture_topology read the description from args["properties"], a key
+    parse_pactl_module_args never produced, so no captured device ever
+    had one -- and apply_profile then renamed every restored device to
+    "<name> Virtual Device".
+    """
+
+    def test_capture_records_the_device_description(self):
+        PactlRunner.create_sink_only(
+            "cap_desc", "DescribedSink", channels=2,
+            sink_properties="device.description='Described'",
+        )
+        profile = self.pm.capture_topology("p_desc")
+        device = next(d for d in profile["devices"] if d["name"] == "cap_desc")
+        self.assertEqual(device.get("description"), "Described")
+
+    def test_a_device_without_a_description_has_none(self):
+        # A null-sink loaded without any sink_properties has no
+        # description to capture, and the fix must not invent one.
+        subprocess.run(
+            ["pactl", "load-module", "module-null-sink", "sink_name=cap_nodesc"],
+            capture_output=True, check=False,
+        )
+        profile = self.pm.capture_topology("p_nodesc")
+        device = next(d for d in profile["devices"] if d["name"] == "cap_nodesc")
+        self.assertIsNone(device.get("description"))

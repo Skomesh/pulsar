@@ -210,40 +210,6 @@ class TestListSinkInputsParsing(unittest.TestCase):
         self.assertEqual(entries[0]["sink_index"], "2425")
 
 
-class TestSinkInputsForNode(unittest.TestCase):
-    """Matching a discovery row to a sink input."""
-
-    def setUp(self):
-        self.streams = [
-            {"index": "1", "node_name": "pw-play", "application": "pw-play"},
-            {"index": "2", "node_name": "Firefox", "application": "firefox"},
-        ]
-
-    def test_matches_on_node_name(self):
-        got = PactlRunner.sink_inputs_for_node(self.streams, "pw-play")
-        self.assertEqual([s["index"] for s in got], ["1"])
-
-    def test_falls_back_to_application_name(self):
-        """Apps that set application.name but not node.name still match."""
-        streams = [{"index": "9", "node_name": "", "application": "discord"}]
-        got = PactlRunner.sink_inputs_for_node(streams, "discord")
-        self.assertEqual([s["index"] for s in got], ["9"])
-
-    def test_no_match_returns_empty(self):
-        self.assertEqual(PactlRunner.sink_inputs_for_node(self.streams, "spotify"), [])
-
-    def test_empty_node_name_matches_nothing(self):
-        """A blank key must not match every stream."""
-        self.assertEqual(PactlRunner.sink_inputs_for_node(self.streams, ""), [])
-
-    def test_returns_all_matches_so_caller_can_disambiguate(self):
-        streams = [
-            {"index": "1", "node_name": "app", "application": "app"},
-            {"index": "2", "node_name": "app", "application": "app"},
-        ]
-        self.assertEqual(len(PactlRunner.sink_inputs_for_node(streams, "app")), 2)
-
-
 class TestMoveSinkInput(unittest.TestCase):
     def test_calls_pactl_with_index_and_name(self):
         with mock.patch.object(PactlRunner, "run_command", return_value=("", 0)) as run:

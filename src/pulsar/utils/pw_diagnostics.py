@@ -147,10 +147,6 @@ def get_graph_snapshot(timeout: float = 5.0) -> Dict[str, Any]:
             f"pw-dump returned unexpected type {type(data).__name__}"
         )
 
-    # Build lookup tables
-    nodes_by_id: Dict[int, Dict[str, Any]] = {}
-    clients_by_id: Dict[int, Dict[str, Any]] = {}
-
     snapshot: Dict[str, Any] = {
         "core": {},
         "clients": [],
@@ -190,7 +186,6 @@ def get_graph_snapshot(timeout: float = 5.0) -> Dict[str, Any]:
                 "props": props,
             }
             snapshot["clients"].append(entry)
-            clients_by_id[oid] = entry
 
         elif otype == "PipeWire:Interface:Module":
             # Module args can be either an actual argument string (e.g.
@@ -230,7 +225,6 @@ def get_graph_snapshot(timeout: float = 5.0) -> Dict[str, Any]:
                 "props": props,
             }
             snapshot["nodes"].append(entry)
-            nodes_by_id[oid] = entry
 
         elif otype == "PipeWire:Interface:Device":
             entry = {

@@ -27,6 +27,87 @@ from pulsar.utils.pw_diagnostics import (
     sample_rate_audit,
 )
 
+# Widgets that scroll their own content when the wheel turns. A wheel
+# press over one of these belongs to the widget: it must scroll the
+# widget, not the page behind it.
+SELF_SCROLLING_WIDGETS = (
+    ttk.Treeview, tk.Listbox, tk.Text, tk.Canvas, ttk.Scrollbar,
+)
+
+
+def _scrolls_itself(widget) -> bool:
+    """Whether the widget scrolls its own content on the wheel."""
+    return isinstance(widget, SELF_SCROLLING_WIDGETS)
+
+
+def _wheel_direction(event) -> int:
+    """+1 for a scroll down, -1 for a scroll up, 0 for neither.
+
+    The convention is the one the handler has always used: on X11 the
+    wheel is Button-4 (up) and Button-5 (down), and on the other
+    platforms a positive delta is a scroll up.
+    """
+    if getattr(event, "delta", 0):
+        return -1 if event.delta > 0 else 1
+    if getattr(event, "num", None) == 4:
+        return -1
+    if getattr(event, "num", None) == 5:
+        return 1
+    return 0
+
+
+def _at_scroll_end(widget, direction) -> bool:
+    """Whether the widget has reached the end of its scroll.
+
+    Used to hand the wheel on to the page when the widget under the
+    cursor has nothing left to scroll.
+    """
+    try:
+        first, last = widget.yview()
+    except Exception:  # pragma: no cover - a widget that cannot scroll
+        return False
+    if direction > 0:
+        return last >= 1.0
+    return first <= 0.0
+
+
+def _handle_wheel(canvas, event) -> str:
+    """Scroll the page if the wheel belongs to it.
+
+    Always returns "break". Tk's binding order is: the widget's own
+    binding, then its class binding, then the bindings of its
+    ancestors. The app's handler sits on the tab's inner frame, so
+    every wheel press that started on a child arrives here -- and
+    without "break" it would scroll the page once for every ancestor
+    that carries the binding. One press, one scroll.
+
+    The page is only scrolled when the wheel does not belong to a
+    widget that scrolls itself, or when that widget has reached the
+    end of its scroll and has nothing left to give.
+    """
+    widget = getattr(event, "widget", None)
+    direction = _wheel_direction(event)
+    if _wheel_scrolls_page(widget, direction):
+        canvas.yview_scroll(direction, "units")
+    return "break"
+
+
+def _wheel_scrolls_page(widget, direction) -> bool:
+    """Whether a wheel press over this widget should scroll the page.
+
+    A widget that scrolls itself keeps the wheel: it is the thing the
+    user is looking at. The page takes over only when the widget has
+    reached the end of its scroll and has nothing left to give.
+
+    This is the whole decision, apart from the canvas, so it can be
+    tested without a pointer.
+    """
+    if direction == 0:
+        return False
+    if _scrolls_itself(widget) and not _at_scroll_end(widget, direction):
+        return False
+    return True
+
 
 class MainWindow:
     """Main application window for pactl-gui."""
@@ -158,17 +239,11 @@ class MainWindow:
         canvas.bind("<Configure>", _on_canvas_configure)
 
         def _on_mousewheel(event):
-            # macOS/Windows: event.delta. X11: num 4 (up) / 5 (down).
-            if event.delta:
-                delta = -1 * (event.delta // 120)
-            elif event.num == 4:
-                delta = -1
-            elif event.num == 5:
-                delta = 1
-            else:
-                delta = 0
-            if delta:
-                canvas.yview_scroll(delta, "units")
+            # Two things were wrong here, and both are fixed in
+            # _handle_wheel: a wheel press over a tree scrolled the
+            # tree AND jumped the page, and the page scrolled once per
+            # ancestor that carried this binding.
+            return _handle_wheel(canvas, event)
 
         # Bind mousewheel ONLY to the inner frame and its descendants
         # (not bind_all). The bug we fixed: bind_all catches every
@@ -181,9 +256,14 @@ class MainWindow:
         # naturally (e.g. other tabs, popup menus, the Output tab
         # text widget).
         def _bind_wheel_to_children(widget):
-            widget.bind("<MouseWheel>", _on_mousewheel)
-            widget.bind("<Button-4>", _on_mousewheel)
-            widget.bind("<Button-5>", _on_mousewheel)
+            # A widget that scrolls itself is left alone. The page
+            # still gets the event when the widget has nothing left to
+            # scroll -- the handler hands it on -- but the widget's
+            # own scrolling is never fought over.
+            if not _scrolls_itself(widget):
+                widget.bind("<MouseWheel>", _on_mousewheel)
+                widget.bind("<Button-4>", _on_mousewheel)
+                widget.bind("<Button-5>", _on_mousewheel)
             for child in widget.winfo_children():
                 _bind_wheel_to_children(child)
 

@@ -7,8 +7,6 @@ src/pulsar/
 ├── __init__.py
 ├── __main__.py                # GUI entry point (`pulsar-gui`)
 ├── cli.py                     # command-line interface (`pulsar`)
-├── config/
-│   └── __init__.py
 ├── ui/
 │   ├── __init__.py
 │   └── main_window.py         # the Tkinter application

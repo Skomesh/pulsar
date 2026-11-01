@@ -275,29 +275,6 @@ class PactlRunner:
         return entries
 
     @staticmethod
-    def sink_inputs_for_node(
-        streams: List[Dict[str, Any]], node_name: str
-    ) -> List[Dict[str, Any]]:
-        """Return the sink inputs whose node.name matches ``node_name``.
-
-        This is how a discovery row (which carries a PipeWire node name from
-        pw-dump) is matched to a pactl sink input, since pactl does not
-        expose the owning pid on a sink input and the discovery side does not
-        always have one either.
-
-        Falls back to application.name when node.name is absent on the pactl
-        side, which is common for apps that do not set one.
-
-        Returns every match, not just the first: a caller that cannot
-        disambiguate needs to know there was a choice to make.
-        """
-        if not node_name:
-            return []
-        return [
-            s for s in streams
-            if s.get('node_name') == node_name or s.get('application') == node_name
-        ]
-
     @staticmethod
     def sink_input_for_node_id(
         streams: List[Dict[str, Any]], node_id: Any

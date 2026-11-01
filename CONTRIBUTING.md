@@ -96,7 +96,7 @@ CI:
 It deliberately leaves `gdbus` visible, because `ubuntu-latest` ships it
 (via `libglib2.0-bin`) and the portal tests need it present. Hiding it
 invents failures CI does not have. A matching run reports
-`362 passed, 175 skipped` and no failures.
+`357 passed, 190 skipped` and no failures.
 
 Hiding a tool from `shutil.which()` is **not** the same as removing it.
 The audio tools were hidden from `which()` but still on `PATH`, so a
@@ -138,7 +138,7 @@ The short version:
 - Prefer f-strings, `pathlib.Path`, and `subprocess.run()` with explicit
   `check=` / `capture_output=`.
 - Keep modules small and focused. Avoid circular imports between
-  `src/pulsar/ui`, `src/pulsar/utils`, and `src/pulsar/config`.
+  `src/pulsar/ui` and `src/pulsar/utils`.
 - `utils/` must not import Tkinter. That is what makes it testable with
   no display and no audio server.
 - No third-party runtime dependencies unless absolutely necessary;
